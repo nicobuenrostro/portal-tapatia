@@ -326,14 +326,14 @@ export default function App(){
     </div>;
   }
 
-  const Hdr = session&&<div style={{background:CD,borderBottom:"2px solid "+OR,padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.06)"}}>
+  const Hdr = session&&<div style={{background:OR,borderBottom:"2px solid #e05500",padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}}>
     <div style={{display:"flex",alignItems:"center",gap:12}}>
-      <LogoSVG h={mob?28:34}/>
-      {!mob&&<><div style={{width:1,height:24,background:BD}}/><span style={{color:GRL,fontSize:10,letterSpacing:2}}>{session.rol==="admin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
+      <LogoSVG h={mob?32:42}/>
+      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.85)",fontSize:10,letterSpacing:2}}>{session.rol==="admin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10}}>
-      {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#1a1a1a",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:GRL,fontSize:10}}>{session.empresa}</div>}</div>}
-      <Btn onClick={doLogout} ghost>SALIR</Btn>
+      {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#fff",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{session.empresa}</div>}</div>}
+      <button onClick={doLogout} style={{background:"rgba(255,255,255,0.2)",color:"#fff",border:"1px solid rgba(255,255,255,0.4)",padding:"7px 16px",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:11,letterSpacing:1}}>SALIR</button>
     </div>
   </div>;
 
