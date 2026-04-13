@@ -1,3 +1,4 @@
+
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   initializeApp
@@ -142,7 +143,9 @@ function Badge({val}){
   const map={
     PUBLICO:{bg:"#dcfce7",c:"#16a34a"},PÚBLICO:{bg:"#dcfce7",c:"#16a34a"},
     DISTRIBUIDOR:{bg:"#dbeafe",c:"#2563eb"},ASOCIADO:{bg:"#fff7ed",c:"#ea580c"},
-    VENDEDOR:{bg:"#f3e8ff",c:"#9333ea"},activo:{bg:"#dcfce7",c:"#16a34a"},
+    VENDEDOR:{bg:"#f3e8ff",c:"#9333ea"},
+    admin:{bg:"#1e3a5f",c:"#60a5fa"},
+    activo:{bg:"#dcfce7",c:"#16a34a"},
     inactivo:{bg:"#fee2e2",c:"#dc2626"}
   };
   const s=map[val]||{bg:"#f3f4f6",c:GRL};
@@ -386,8 +389,8 @@ export default function App(){
     setUserLoad(true);
     const data = await fbGetUsuarios();
     if(data !== null){
-      // Filtrar admin del listado visible pero NO borrar nada
-      setUsers(data.filter(u=>u.rol!=="admin"));
+      // Mostrar todos excepto el admin actual para no confundir
+      setUsers(data.filter(u=>u.id!==session?.id));
     } else {
       console.warn("No se pudieron cargar usuarios — manteniendo estado anterior");
     }
@@ -572,11 +575,18 @@ export default function App(){
   }
 
   // ── Eliminar usuario ───────────────────────────────────────
-  async function deleteClient(id,nombre){
+  async function deleteClient(id,nombre,rol){
+    // Proteger: no eliminar si es el último admin
+    if(rol==="admin"){
+      const admins=users.filter(u=>u.rol==="admin");
+      if(admins.length<=1){
+        alert("❌ No puedes eliminar el único administrador del sistema.");
+        return;
+      }
+    }
     if(!window.confirm(`¿Eliminar a ${nombre}? Esta acción no se puede deshacer.`)) return;
     try {
       await deleteDoc(doc(db,"usuarios",id));
-      // Bitácora
       await setDoc(doc(db,"bitacora",`del_${Date.now()}`),{
         tipo:"eliminacion_usuario",
         usuario_id:id,
@@ -584,7 +594,6 @@ export default function App(){
         por:session.nombre,
         fecha:new Date().toISOString(),
       });
-      // Actualizar estado local sin recargar todo
       setUsers(prev=>prev.filter(u=>u.id!==id));
     } catch(err){
       alert("❌ Error al eliminar: "+err.message);
@@ -743,32 +752,39 @@ export default function App(){
           </div>
         </div>
         {mob?(
-          <div>{users.map(u=><div key={u.id} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <div><div style={{fontWeight:700,fontSize:13}}>{u.nombre}</div>{u.empresa&&<div style={{color:GRL,fontSize:11}}>{u.empresa}</div>}</div>
+              <div>
+                <div style={{fontWeight:700,fontSize:13}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</div>
+                {u.empresa&&<div style={{color:GRL,fontSize:11}}>{u.empresa}</div>}
+              </div>
               <Badge val={u.estatus}/>
             </div>
-            <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}><Badge val={u.lista}/><span style={{color:GRL,fontSize:11,fontFamily:"monospace"}}>@{u.usuario}</span></div>
+            <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+              <Badge val={u.rol==="admin"?"admin":u.lista}/>
+              <span style={{color:GRL,fontSize:11,fontFamily:"monospace"}}>@{u.usuario}</span>
+            </div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>
-              <Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>
-              <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre)}>ELIMINAR</Btn>
+              {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
+              {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
+              <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>
             </div>
           </div>)}</div>
         ):(
           <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-              <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","TIPO","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
-              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
-                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}</td>
+              <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
+              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:u.rol==="admin"?"#eff6ff":i%2===0?CD:"#fafafa"}}>
+                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
                 <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                 <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
-                <td style={{padding:"9px 14px"}}><Badge val={u.lista}/></td>
+                <td style={{padding:"9px 14px"}}><Badge val={u.rol==="admin"?"admin":u.rol}/></td>
+                <td style={{padding:"9px 14px"}}>{u.rol==="admin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                 <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
-                  <Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>
-                  <Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>
-                  <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre)}>ELIMINAR</Btn>
+                  {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
+                  {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
+                  <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>
                 </div></td>
               </tr>)}</tbody>
             </table>
