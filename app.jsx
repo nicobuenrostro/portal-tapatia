@@ -154,6 +154,9 @@ function Pager({total,pg,setPg,ps=50}){
 // ════════════════════════════════════════════════════════════
 // APP
 // ════════════════════════════════════════════════════════════
+// ── Sin datos demo — todo viene de Firebase ───────────────────
+// Estado inicial siempre vacío, nunca demo data
+
 export default function App(){
   const [session, setSession] = useState(()=>{
     try { const s=localStorage.getItem("gt_session"); return s?JSON.parse(s):null; } catch(e){return null;}
@@ -162,8 +165,8 @@ export default function App(){
     try { const s=localStorage.getItem("gt_session"); if(s){const u=JSON.parse(s);return u.rol==="admin"?"admin":"client";} } catch(e){} return "login";
   });
   const [tab,     setTab]     = useState("products");
-  const [users,   setUsers]   = useState([]);
-  const [products,setProducts]= useState([]);
+  const [users,   setUsers]   = useState([]);      // siempre vacío al inicio
+  const [products,setProducts]= useState([]);      // siempre vacío al inicio
   const [loading, setLoading] = useState(false);
   const [search,  setSearch]  = useState("");
   const [ds,      setDs]      = useState("");
@@ -262,21 +265,45 @@ export default function App(){
     reader.readAsText(file,"UTF-8");
   }
 
-  // Guardar cliente
+  // Guardar cliente — nunca sobrescribe sin confirmar
   async function saveClient(form){
-    const id = form.id || "u_"+Date.now();
-    const data = {
-      nombre:  form.nombre,
-      empresa: form.empresa||"",
-      usuario: form.usuario,
-      lista:   form.lista,
-      estatus: form.estatus,
-      rol:     "client",
-    };
-    if(form.password) data.password = await hashPassword(form.password);
-    await setDoc(doc(db,"usuarios",id), data, {merge:true});
-    await loadUsers();
-    setModal(null);
+    try {
+      const id = form.id || "u_"+Date.now();
+      const data = {
+        nombre:  form.nombre.trim(),
+        empresa: (form.empresa||"").trim(),
+        usuario: form.usuario.trim(),
+        lista:   form.lista,
+        estatus: form.estatus,
+        rol:     "client",
+        actualizado: new Date().toISOString(),
+      };
+      if(form.password) data.password = await hashPassword(form.password);
+      
+      // Verificar que el usuario no exista ya (solo en creación)
+      if(!form.id){
+        const existing = users.find(u=>u.usuario===form.usuario.trim());
+        if(existing){ alert("❌ Ya existe un usuario con ese nombre de usuario. Elige otro."); return; }
+        data.creado_en = new Date().toISOString();
+        data.creado_por = session.nombre;
+      }
+
+      await setDoc(doc(db,"usuarios",id), data, {merge:true});
+      
+      // Registrar en bitácora
+      await setDoc(doc(db,"bitacora",`usuario_${Date.now()}`),{
+        tipo: form.id?"edicion_usuario":"nuevo_usuario",
+        usuario_afectado: form.usuario,
+        hecho_por: session.nombre,
+        fecha: new Date().toISOString(),
+      });
+
+      await loadUsers();
+      setModal(null);
+    } catch(err){
+      alert("❌ Error al guardar usuario: "+err.message);
+      console.error(err);
+    }
   }
 
   async function toggleEstatus(id,est){
