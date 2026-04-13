@@ -114,14 +114,11 @@ function Btn({onClick,children,danger,ghost,sm}){
   return <button onClick={onClick} style={{background:bg,color:cl,border:br,padding:sm?"4px 10px":"9px 16px",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:sm?10:12,letterSpacing:1,whiteSpace:"nowrap"}}>{children}</button>;
 }
 function LogoSVG({white,h=36}){
-  const gc=white?"#fff":"#7C7C7C",oc=white?"#fff":OR;
-  return <svg height={h} viewBox="0 0 140 50" xmlns="http://www.w3.org/2000/svg">
-    <path d="M8 8 Q8 4 12 4 L30 4 L30 10 L14 10 Q12 10 12 12 L12 38 Q12 40 14 40 L28 40 L28 28 L20 28 L20 22 L34 22 L34 40 Q34 46 28 46 L12 46 Q6 46 6 40 L6 12 Q6 6 8 6 Z" fill={gc}/>
-    <path d="M42 4 L78 4 L78 12 L64 12 L64 46 L56 46 L56 12 L42 12 Z" fill={gc}/>
-    <polygon points="22,8 24.5,15.5 32,15.5 26,20 28.5,27.5 22,23 15.5,27.5 18,20 12,15.5 19.5,15.5" fill={oc}/>
-    <text x="88" y="20" fontFamily="Arial Narrow,Arial,sans-serif" fontWeight="600" fontSize="13" letterSpacing="3" fill={gc}>GRUPO</text>
-    <text x="86" y="40" fontFamily="Arial Narrow,Arial,sans-serif" fontWeight="700" fontSize="16" letterSpacing="2" fill={oc}>TAPATÍA</text>
-  </svg>;
+  return <img
+    src="https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png"
+    alt="Grupo Tapatía"
+    style={{height:h, objectFit:"contain", maxWidth:220}}
+  />;
 }
 
 // Buscador fuera de App para no perder foco
