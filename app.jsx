@@ -954,7 +954,7 @@ export default function App(){
                   const v=Number(p[a])||0;
                   return <div key={a} style={{background:v>0?"#f0fdf4":"#f9f9f9",border:"1px solid "+(v>0?"#bbf7d0":BD),borderRadius:3,padding:"2px 7px",textAlign:"center"}}>
                     <div style={{fontSize:9,color:GRL}}>{ALMS_L[idx]}</div>
-                    <div style={{fontSize:11,fontWeight:700,color:v>0?nColor(v):"#ccc"}}>{v}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:v>0?nColor(v):"#ccc"}}>{v>=30?"+30":v}</div>
                   </div>;
                 })}
               </div>
@@ -990,7 +990,7 @@ export default function App(){
                   <td style={{padding:"7px 8px",textAlign:"center",color:GRL,fontSize:11}}>{almPpal(p)}</td>
                   {ALMS.map(a=>{
                     const v=Number(p[a])||0;
-                    return <td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v}</td>;
+                    return <td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v>=30?"+30":v}</td>;
                   })}
                   <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
                 </tr>;
