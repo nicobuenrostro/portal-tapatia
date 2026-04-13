@@ -117,7 +117,7 @@ function LogoSVG({white,h=36}){
   return <img
     src="https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png"
     alt="Grupo Tapatía"
-    style={{height:h, objectFit:"contain", maxWidth:220}}
+    style={{height:h, objectFit:"contain", maxWidth:320}}
   />;
 }
 
