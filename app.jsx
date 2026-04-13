@@ -155,8 +155,12 @@ function Pager({total,pg,setPg,ps=50}){
 // APP
 // ════════════════════════════════════════════════════════════
 export default function App(){
-  const [session, setSession] = useState(null);
-  const [view,    setView]    = useState("login");
+  const [session, setSession] = useState(()=>{
+    try { const s=localStorage.getItem("gt_session"); return s?JSON.parse(s):null; } catch(e){return null;}
+  });
+  const [view, setView] = useState(()=>{
+    try { const s=localStorage.getItem("gt_session"); if(s){const u=JSON.parse(s);return u.rol==="admin"?"admin":"client";} } catch(e){} return "login";
+  });
   const [tab,     setTab]     = useState("products");
   const [users,   setUsers]   = useState([]);
   const [products,setProducts]= useState([]);
@@ -192,7 +196,9 @@ export default function App(){
       const ok = await checkPassword(lp.trim(), u.password);
       if(!ok){ setLerr("Usuario o contraseña incorrectos"); setLoading(false); return; }
       if(u.estatus==="inactivo"){ setLerr("Cuenta inactiva. Contacta al administrador."); setLoading(false); return; }
-      setSession(u); setView(u.rol==="admin"?"admin":"client");
+      setSession(u);
+      localStorage.setItem("gt_session", JSON.stringify(u));
+      setView(u.rol==="admin"?"admin":"client");
       setLu(""); setLp("");
       loadProducts();
       if(u.rol==="admin") loadUsers();
@@ -200,7 +206,10 @@ export default function App(){
     setLoading(false);
   }
 
-  function doLogout(){ setSession(null); setView("login"); setSearch(""); setDs(""); setPage(0); setProducts([]); setUsers([]); }
+  function doLogout(){ 
+    setSession(null); setView("login"); setSearch(""); setDs(""); setPage(0); setProducts([]); setUsers([]);
+    localStorage.removeItem("gt_session");
+  }
 
   async function loadProducts(){
     const snap = await getDocs(query(collection(db,"productos"),orderBy("codigo")));
