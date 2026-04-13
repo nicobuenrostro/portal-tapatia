@@ -1,8 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
-import { initializeApp } from "firebase/app";
+import {
+  initializeApp
+} from "firebase/app";
 import {
   getFirestore, collection, getDocs, doc, setDoc,
-  deleteDoc, query, orderBy, writeBatch, getDoc
+  deleteDoc, writeBatch, getDoc
 } from "firebase/firestore";
 
 // ── Firebase config ───────────────────────────────────────────
@@ -49,20 +51,26 @@ async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 // NUNCA pisa el estado si hay error — retorna null en caso de fallo
 async function fbGetUsuarios(){
   try {
-    const snap=await getDocs(query(collection(db,"usuarios"),orderBy("nombre")));
+    // Sin orderBy para evitar error si falta índice o campo nombre
+    const snap=await getDocs(collection(db,"usuarios"));
     if(snap.empty) return [];
-    return snap.docs.map(d=>({id:d.id,...d.data()}));
+    const data=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Ordenar en cliente para no depender de índices Firebase
+    return data.sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   } catch(e){
     console.error("Error leyendo usuarios:",e);
-    return null; // null = error, no tocar estado
+    return null;
   }
 }
 
 async function fbGetProductos(){
   try {
-    const snap=await getDocs(query(collection(db,"productos"),orderBy("codigo")));
+    // Sin orderBy para evitar error si falta índice
+    const snap=await getDocs(collection(db,"productos"));
     if(snap.empty) return [];
-    return snap.docs.map(d=>({id:d.id,...d.data()}));
+    const data=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Ordenar en cliente
+    return data.sort((a,b)=>(a.codigo||"").localeCompare(b.codigo||""));
   } catch(e){
     console.error("Error leyendo productos:",e);
     return null;
@@ -198,6 +206,130 @@ function Pager({total,pg,setPg,ps=50}){
       <button onClick={()=>{setPg(p=>Math.min(pages-1,p+1));window.scrollTo(0,0);}} disabled={pg+1>=pages}
         style={{padding:"6px 12px",background:pg+1>=pages?BD:OR,color:pg+1>=pages?GRL:"#fff",border:"none",borderRadius:4,cursor:pg+1>=pages?"default":"pointer",fontSize:11,fontWeight:700}}>SIG →</button>
     </div>
+  </div>;
+}
+
+// ── Cambiar contraseña ────────────────────────────────────────
+function ChangePassword({session,db,hashPassword,checkPassword}){
+  const [actual,setActual]=useState("");
+  const [nueva,setNueva]=useState("");
+  const [confirmar,setConfirmar]=useState("");
+  const [msg,setMsg]=useState("");
+  const [loading,setLoading]=useState(false);
+
+  async function cambiar(){
+    if(!actual||!nueva||!confirmar){setMsg("❌ Completa todos los campos.");return;}
+    if(nueva!==confirmar){setMsg("❌ Las contraseñas nuevas no coinciden.");return;}
+    if(nueva.length<4){setMsg("❌ La contraseña debe tener al menos 4 caracteres.");return;}
+    setLoading(true);setMsg("");
+    try {
+      const snap=await getDocs(collection(db,"usuarios"));
+      const adminDoc=snap.docs.find(d=>d.data().usuario===session.usuario);
+      if(!adminDoc){setMsg("❌ No se encontró tu usuario.");setLoading(false);return;}
+      const ok=await checkPassword(actual,adminDoc.data().password);
+      if(!ok){setMsg("❌ La contraseña actual es incorrecta.");setLoading(false);return;}
+      const hash=await hashPassword(nueva);
+      await setDoc(doc(db,"usuarios",adminDoc.id),{password:hash,actualizado:new Date().toISOString()},{merge:true});
+      // Actualizar sesión local
+      const updated={...session,password:hash};
+      localStorage.setItem("gt_session",JSON.stringify(updated));
+      setMsg("✅ Contraseña cambiada exitosamente.");
+      setActual("");setNueva("");setConfirmar("");
+    } catch(e){setMsg("❌ Error: "+e.message);}
+    setLoading(false);
+  }
+
+  return <div>
+    <div style={{display:"grid",gap:10}}>
+      <div>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>CONTRASEÑA ACTUAL</div>
+        <input type="password" value={actual} onChange={e=>setActual(e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+      <div>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>CONTRASEÑA NUEVA</div>
+        <input type="password" value={nueva} onChange={e=>setNueva(e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+      <div>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>CONFIRMAR CONTRASEÑA NUEVA</div>
+        <input type="password" value={confirmar} onChange={e=>setConfirmar(e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+    </div>
+    {msg&&<div style={{marginTop:10,fontSize:12,color:msg.startsWith("✅")?"#16a34a":"#dc2626",fontWeight:600}}>{msg}</div>}
+    <button onClick={cambiar} disabled={loading}
+      style={{marginTop:14,background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,letterSpacing:1,opacity:loading?0.7:1}}>
+      {loading?"GUARDANDO...":"CAMBIAR CONTRASEÑA"}
+    </button>
+  </div>;
+}
+
+// ── Crear admin ───────────────────────────────────────────────
+function CreateAdmin({session,db,hashPassword}){
+  const [form,setForm]=useState({nombre:"",usuario:"",password:"",confirmar:""});
+  const [msg,setMsg]=useState("");
+  const [loading,setLoading]=useState(false);
+  const upd=(k,v)=>setForm(p=>({...p,[k]:v}));
+
+  async function crear(){
+    if(!form.nombre||!form.usuario||!form.password){setMsg("❌ Completa todos los campos.");return;}
+    if(form.password!==form.confirmar){setMsg("❌ Las contraseñas no coinciden.");return;}
+    if(form.password.length<4){setMsg("❌ Contraseña muy corta (mínimo 4 caracteres).");return;}
+    setLoading(true);setMsg("");
+    try {
+      // Verificar que no exista
+      const snap=await getDocs(collection(db,"usuarios"));
+      const existe=snap.docs.find(d=>d.data().usuario===form.usuario.trim());
+      if(existe){setMsg("❌ Ya existe un usuario con ese nombre. Elige otro.");setLoading(false);return;}
+      const id="admin_"+Date.now();
+      const hash=await hashPassword(form.password);
+      await setDoc(doc(db,"usuarios",id),{
+        nombre:  form.nombre.trim(),
+        usuario: form.usuario.trim(),
+        password:hash,
+        rol:     "admin",
+        lista:   "PUBLICO",
+        estatus: "activo",
+        empresa: "Grupo Tapatía",
+        creado_por: session.nombre,
+        creado_en:  new Date().toISOString(),
+        actualizado:new Date().toISOString(),
+      });
+      setMsg("✅ Administrador '"+form.usuario+"' creado exitosamente.");
+      setForm({nombre:"",usuario:"",password:"",confirmar:""});
+    } catch(e){setMsg("❌ Error: "+e.message);}
+    setLoading(false);
+  }
+
+  return <div>
+    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 14px"}}>
+      <div style={{marginBottom:12}}>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>NOMBRE</div>
+        <input value={form.nombre} onChange={e=>upd("nombre",e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>USUARIO</div>
+        <input value={form.usuario} onChange={e=>upd("usuario",e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>CONTRASEÑA</div>
+        <input type="password" value={form.password} onChange={e=>upd("password",e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>CONFIRMAR</div>
+        <input type="password" value={form.confirmar} onChange={e=>upd("confirmar",e.target.value)}
+          style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      </div>
+    </div>
+    {msg&&<div style={{fontSize:12,color:msg.startsWith("✅")?"#16a34a":"#dc2626",fontWeight:600,marginBottom:10}}>{msg}</div>}
+    <button onClick={crear} disabled={loading}
+      style={{background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,letterSpacing:1,opacity:loading?0.7:1}}>
+      {loading?"CREANDO...":"CREAR ADMINISTRADOR"}
+    </button>
   </div>;
 }
 
@@ -644,18 +776,31 @@ export default function App(){
         )}
       </div>}
 
-      {tab==="settings"&&<div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,maxWidth:480,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-        <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>INFORMACIÓN DEL SISTEMA</div>
-        <div style={{color:GRL,fontSize:12,lineHeight:2}}>
-          <div>🔥 Base de datos: <strong style={{color:"#1a1a1a"}}>Firebase Firestore</strong></div>
-          <div>🌐 Proyecto: <strong style={{color:"#1a1a1a"}}>portal-tapatia</strong></div>
-          <div>👤 Admin: <strong style={{color:"#1a1a1a"}}>{session?.nombre}</strong></div>
-          <div>📦 Productos en memoria: <strong style={{color:"#1a1a1a"}}>{products.length}</strong></div>
-          <div>👥 Clientes: <strong style={{color:"#1a1a1a"}}>{users.filter(u=>u.estatus==="activo").length} activos / {users.filter(u=>u.estatus==="inactivo").length} inactivos</strong></div>
+      {tab==="settings"&&<div style={{maxWidth:520}}>
+        {/* Cambiar contraseña */}
+        <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>🔑 CAMBIAR MI CONTRASEÑA</div>
+          <ChangePassword session={session} db={db} hashPassword={hashPassword} checkPassword={checkPassword}/>
         </div>
-        <div style={{marginTop:16,display:"flex",gap:8,flexWrap:"wrap"}}>
-          <button onClick={loadProducts} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"9px 16px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ Recargar productos</button>
-          <button onClick={loadUsers} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"9px 16px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ Recargar clientes</button>
+        {/* Crear admin */}
+        <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>👤 CREAR USUARIO ADMINISTRADOR</div>
+          <CreateAdmin session={session} db={db} hashPassword={hashPassword}/>
+        </div>
+        {/* Info sistema */}
+        <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:12}}>ℹ️ INFORMACIÓN DEL SISTEMA</div>
+          <div style={{color:GRL,fontSize:12,lineHeight:2}}>
+            <div>🔥 Base de datos: <strong style={{color:"#1a1a1a"}}>Firebase Firestore</strong></div>
+            <div>🌐 Proyecto: <strong style={{color:"#1a1a1a"}}>portal-tapatia</strong></div>
+            <div>👤 Admin: <strong style={{color:"#1a1a1a"}}>{session?.nombre}</strong></div>
+            <div>📦 Productos: <strong style={{color:"#1a1a1a"}}>{products.length}</strong></div>
+            <div>👥 Clientes: <strong style={{color:"#1a1a1a"}}>{users.filter(u=>u.estatus==="activo").length} activos / {users.filter(u=>u.estatus==="inactivo").length} inactivos</strong></div>
+          </div>
+          <div style={{marginTop:16,display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={loadProducts} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"9px 16px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ Recargar productos</button>
+            <button onClick={loadUsers} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"9px 16px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ Recargar clientes</button>
+          </div>
         </div>
       </div>}
     </div>
