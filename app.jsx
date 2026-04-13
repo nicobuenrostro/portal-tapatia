@@ -930,7 +930,10 @@ export default function App(){
     <div style={{padding:mob?12:20,maxWidth:1400,margin:"0 auto"}}>
       <div style={{background:"#fff7ed",borderLeft:"3px solid "+OR,border:"1px solid #fed7aa",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
         <span style={{color:OR,fontWeight:700}}>i</span>
-        <span style={{color:GRL,fontSize:11}}>Precios <strong style={{color:"#1a1a1a"}}>antes de IVA</strong>. El impuesto se aplicará al facturar.</span>
+        <span style={{color:GRL,fontSize:11}}>
+          Precios <strong style={{color:"#1a1a1a"}}>antes de IVA</strong>. El impuesto se aplicará al facturar.{" "}
+          <strong style={{color:"#dc2626"}}>Productos agrícolas no causan IVA.</strong>
+        </span>
       </div>
       {isVend&&<div style={{background:"#f3e8ff",border:"1px solid #d8b4fe",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
         <span style={{color:"#9333ea",fontWeight:700}}>★</span>
