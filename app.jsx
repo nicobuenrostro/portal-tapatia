@@ -125,7 +125,17 @@ function detectTipo(s){
   return"";
 }
 
-// ── CSV parser ────────────────────────────────────────────────
+// ── Permisos por rol ──────────────────────────────────────────
+function canDo(session, accion){
+  const rol = session?.rol;
+  if(rol==="superadmin") return true; // acceso total
+  if(rol==="admin"){
+    // Solo puede: ver productos, subir CSV, crear/editar clientes y vendedores
+    const permitido=["productos","clientes","subir_csv","crear_cliente","editar_cliente","toggle_estatus","eliminar_cliente"];
+    return permitido.includes(accion);
+  }
+  return false;
+}
 function parseCsv(text){
   const lines=text.trim().split("\n"),first=lines[0];
   const delim=first.includes("\t")?"\t":first.includes(";")?";":","
@@ -143,7 +153,9 @@ function Badge({val}){
     PUBLICO:{bg:"#dcfce7",c:"#16a34a"},PÚBLICO:{bg:"#dcfce7",c:"#16a34a"},
     DISTRIBUIDOR:{bg:"#dbeafe",c:"#2563eb"},ASOCIADO:{bg:"#fff7ed",c:"#ea580c"},
     VENDEDOR:{bg:"#f3e8ff",c:"#9333ea"},
-    admin:{bg:"#1e3a5f",c:"#60a5fa"},
+    superadmin:{bg:"#fef3c7",c:"#d97706"},
+    admin:{bg:"#dbeafe",c:"#2563eb"},
+    client:{bg:"#f3f4f6",c:"#6b7280"},
     activo:{bg:"#dcfce7",c:"#16a34a"},
     inactivo:{bg:"#fee2e2",c:"#dc2626"}
   };
@@ -466,7 +478,7 @@ export default function App(){
       if(u.estatus==="inactivo"){ setLerr("Cuenta inactiva. Contacta al administrador."); setLoginLoad(false); return; }
       setSession(u);
       localStorage.setItem("gt_session",JSON.stringify(u));
-      setView(u.rol==="admin"?"admin":"client");
+      setView(u.rol==="admin"||u.rol==="superadmin"?"admin":"client");
       setLu(""); setLp("");
     } catch(e){ setLerr("Error: "+e.message); }
     setLoginLoad(false);
@@ -740,7 +752,9 @@ export default function App(){
   if(view==="admin") return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
     {Hdr}{modal&&<ClientModal/>}
     <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-      {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["settings","⚙️ CONFIG"]].map(([k,l])=>(
+      {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],
+        ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
+        .map(([k,l])=>(
         <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
           color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",
           cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
@@ -799,7 +813,7 @@ export default function App(){
       {tab==="clients"&&<div>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
           <div>
-            <span style={{color:GRL,fontSize:11}}>{users.length} clientes registrados</span>
+            <span style={{color:GRL,fontSize:11}}>{users.length} usuarios registrados</span>
             {userLoad&&<span style={{color:OR,fontSize:11,marginLeft:8}}>cargando...</span>}
           </div>
           <div style={{display:"flex",gap:8}}>
@@ -834,14 +848,20 @@ export default function App(){
                 <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
                 <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                 <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
-                <td style={{padding:"9px 14px"}}><PassCell uid={u.id} db={db} hashPassword={hashPassword}/></td>
-                <td style={{padding:"9px 14px"}}><Badge val={u.rol==="admin"?"admin":u.rol}/></td>
-                <td style={{padding:"9px 14px"}}>{u.rol==="admin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
+                <td style={{padding:"9px 14px"}}>
+                  {/* Solo superadmin ve contraseñas de admins, admin normal solo ve de clientes */}
+                  {(canDo(session,"config") || u.rol!=="admin") 
+                    ? <PassCell uid={u.id} db={db} hashPassword={hashPassword}/>
+                    : <span style={{color:"#bbb",fontSize:11}}>—</span>}
+                </td>
+                <td style={{padding:"9px 14px"}}><Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.rol}/></td>
+                <td style={{padding:"9px 14px"}}>{u.rol==="admin"||u.rol==="superadmin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                 <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
-                  {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
-                  {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
-                  {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
+                  {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
+                  {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
+                  {u.id!==session?.id && canDo(session,"config") &&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
+                  {u.id!==session?.id && !canDo(session,"config") && (u.rol!=="admin"&&u.rol!=="superadmin") &&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
                 </div></td>
               </tr>)}</tbody>
             </table>
