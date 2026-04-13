@@ -1,4 +1,3 @@
-
 import { useState, useEffect, useMemo, useRef } from "react";
 import {
   initializeApp
@@ -212,6 +211,62 @@ function Pager({total,pg,setPg,ps=50}){
   </div>;
 }
 
+// ── Celda de contraseña con ver/editar ───────────────────────
+function PassCell({uid, db, hashPassword}){
+  const [show,   setShow]   = useState(false);
+  const [editing,setEditing]= useState(false);
+  const [newPass,setNewPass] = useState("");
+  const [saving, setSaving]  = useState(false);
+  const [msg,    setMsg]     = useState("");
+  const [plain,  setPlain]   = useState(""); // contraseña en texto plano si se guardó en esta sesión
+
+  async function guardar(){
+    if(!newPass.trim()){ setMsg("❌ Escribe una contraseña"); return; }
+    if(newPass.trim().length<3){ setMsg("❌ Mínimo 3 caracteres"); return; }
+    setSaving(true); setMsg("");
+    try {
+      const hash = await hashPassword(newPass.trim());
+      await setDoc(doc(db,"usuarios",uid),{password:hash, actualizado:new Date().toISOString()},{merge:true});
+      setPlain(newPass.trim());
+      setNewPass(""); setEditing(false);
+      setMsg("✅ Guardada");
+      setTimeout(()=>setMsg(""),3000);
+    } catch(e){ setMsg("❌ "+e.message); }
+    setSaving(false);
+  }
+
+  if(editing) return(
+    <div style={{display:"flex",gap:4,alignItems:"center",minWidth:200}}>
+      <input autoFocus value={newPass} onChange={e=>setNewPass(e.target.value)}
+        onKeyDown={e=>{if(e.key==="Enter")guardar();if(e.key==="Escape"){setEditing(false);setNewPass("");}}}
+        placeholder="Nueva contraseña"
+        style={{padding:"4px 8px",border:"1px solid "+OR,borderRadius:3,fontSize:12,width:130,outline:"none"}}/>
+      <button onClick={guardar} disabled={saving}
+        style={{background:OR,color:"#fff",border:"none",padding:"4px 8px",borderRadius:3,cursor:"pointer",fontSize:10,fontWeight:700}}>
+        {saving?"...":"OK"}
+      </button>
+      <button onClick={()=>{setEditing(false);setNewPass("");}}
+        style={{background:"#f3f4f6",color:GRL,border:"1px solid "+BD,padding:"4px 8px",borderRadius:3,cursor:"pointer",fontSize:10}}>✕</button>
+      {msg&&<span style={{fontSize:10,color:msg.startsWith("✅")?"#16a34a":"#dc2626"}}>{msg}</span>}
+    </div>
+  );
+
+  return(
+    <div style={{display:"flex",gap:4,alignItems:"center"}}>
+      <span style={{fontFamily:"monospace",fontSize:11,color:show?"#1a1a1a":GRL,background:show?"#f0fdf4":"#f3f4f6",padding:"3px 8px",borderRadius:3,minWidth:80}}>
+        {show ? (plain||"(hash)") : "••••••"}
+      </span>
+      <button onClick={()=>setShow(s=>!s)}
+        style={{background:"none",border:"none",cursor:"pointer",fontSize:13,padding:"2px 4px",color:GRL}}
+        title={show?"Ocultar":"Mostrar"}>{show?"🙈":"👁"}</button>
+      <button onClick={()=>{setEditing(true);setShow(false);}}
+        style={{background:"none",border:"none",cursor:"pointer",fontSize:12,padding:"2px 4px",color:OR}}
+        title="Cambiar contraseña">✏️</button>
+      {msg&&<span style={{fontSize:10,color:"#16a34a"}}>{msg}</span>}
+    </div>
+  );
+}
+
 // ── Cambiar contraseña ────────────────────────────────────────
 function ChangePassword({session,db,hashPassword,checkPassword}){
   const [actual,setActual]=useState("");
@@ -389,8 +444,9 @@ export default function App(){
     setUserLoad(true);
     const data = await fbGetUsuarios();
     if(data !== null){
-      // Mostrar todos excepto el admin actual para no confundir
-      setUsers(data.filter(u=>u.id!==session?.id));
+      // Mostrar todos los usuarios incluyendo otros admins
+      // Solo ocultar al admin actual para no confundir
+      setUsers(data);
     } else {
       console.warn("No se pudieron cargar usuarios — manteniendo estado anterior");
     }
@@ -767,24 +823,25 @@ export default function App(){
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
               {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
               {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
-              <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>
+              {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
             </div>
           </div>)}</div>
         ):(
           <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-              <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
+              <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","CONTRASEÑA","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
               <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:u.rol==="admin"?"#eff6ff":i%2===0?CD:"#fafafa"}}>
                 <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
                 <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                 <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
+                <td style={{padding:"9px 14px"}}><PassCell uid={u.id} db={db} hashPassword={hashPassword}/></td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.rol==="admin"?"admin":u.rol}/></td>
                 <td style={{padding:"9px 14px"}}>{u.rol==="admin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                 <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
                   {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
                   {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
-                  <Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>
+                  {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
                 </div></td>
               </tr>)}</tbody>
             </table>
