@@ -669,10 +669,19 @@ export default function App(){
   }
 
   // ── Filtrado ───────────────────────────────────────────────
+  // Filtrado usa ds (debounced) — buscador SIN cambios
+  // Solo se agrega ordenamiento por stock al final
   const filtered=useMemo(()=>{
     const q=ds.trim();
-    if(!q)return products;
-    return products.filter(p=>smartMatch(q,p));
+    const results = q ? products.filter(p=>smartMatch(q,p)) : [...products];
+    // Ordenar por stock total: mayor a menor, 0 al final
+    return results.sort((a,b)=>{
+      const ta=calcTotal(a), tb=calcTotal(b);
+      if(ta===0 && tb===0) return 0;
+      if(ta===0) return 1;
+      if(tb===0) return -1;
+      return tb-ta;
+    });
   },[products,ds]);
 
   // ── Modal cliente ──────────────────────────────────────────
@@ -925,18 +934,30 @@ export default function App(){
             return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
               <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{p.codigo}</div>
               <div style={{fontSize:12,fontWeight:600,marginBottom:8,lineHeight:1.4}}>{p.descripcion}</div>
-              <div style={{display:"flex",gap:8,marginBottom:8,flexWrap:"wrap"}}>
-                <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Stock: {stockVis(tot)}</span>
-                <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
-              </div>
-              {isVend?<div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              {/* Precios */}
+              {isVend?<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
                 <div style={{background:"#f0fdf4",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>PÚBLICO</div><div style={{color:"#16a34a",fontWeight:700,fontSize:12}}>{money(p.publico)}</div></div>
                 <div style={{background:"#eff6ff",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>DISTRIBUIDOR</div><div style={{color:"#2563eb",fontWeight:700,fontSize:12}}>{money(p.distribuidor)}</div></div>
                 <div style={{background:"#fff7ed",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>ASOCIADO</div><div style={{color:"#ea580c",fontWeight:700,fontSize:12}}>{money(p.asociado)}</div></div>
-              </div>:<div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                <span style={{color:GRL,fontSize:10}}>{almPpal(p)}</span>
+              </div>:<div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+                <span style={{color:GRL,fontSize:10}}>Almacén ppal: <strong>{almPpal(p)}</strong></span>
                 <span style={{color:OR,fontWeight:700,fontSize:14}}>{money(getPrecio(p,lista))}</span>
               </div>}
+              {/* Stock total y disponibilidad */}
+              <div style={{display:"flex",gap:8,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Total: {stockVis(tot)}</span>
+                <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
+              </div>
+              {/* Desglose por almacén */}
+              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                {ALMS.map((a,idx)=>{
+                  const v=Number(p[a])||0;
+                  return <div key={a} style={{background:v>0?"#f0fdf4":"#f9f9f9",border:"1px solid "+(v>0?"#bbf7d0":BD),borderRadius:3,padding:"2px 7px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:GRL}}>{ALMS_L[idx]}</div>
+                    <div style={{fontSize:11,fontWeight:700,color:v>0?nColor(v):"#ccc"}}>{v}</div>
+                  </div>;
+                })}
+              </div>
             </div>;
           })}</div>
         ):(
@@ -950,27 +971,28 @@ export default function App(){
                   <th style={{padding:"9px 8px",textAlign:"right",color:"#2563eb",fontWeight:700}}>DISTRIBUIDOR</th>
                   <th style={{padding:"9px 8px",textAlign:"right",color:"#ea580c",fontWeight:700}}>ASOCIADO</th>
                 </>:<th style={{padding:"9px 10px",textAlign:"right",color:OR,fontWeight:700}}>PRECIO</th>}
-                <th style={{padding:"9px 8px",textAlign:"right",color:GRL}}>STOCK</th>
-                <th style={{padding:"9px 8px",textAlign:"center",color:GRL}}>DISP.</th>
-                <th style={{padding:"9px 8px",textAlign:"center",color:GRL}}>NIVEL</th>
-                <th style={{padding:"9px 8px",textAlign:"center",color:GRL,whiteSpace:"nowrap"}}>ALM. PPAL</th>
-                <th style={{padding:"9px 8px",textAlign:"left",color:GRL,whiteSpace:"nowrap"}}>ALMACENES</th>
+                <th style={{padding:"9px 8px",textAlign:"right",color:OR,fontWeight:700}}>TOTAL</th>
+                <th style={{padding:"9px 8px",textAlign:"center",color:GRL,fontSize:10}}>PPAL</th>
+                {ALMS_L.map(a=><th key={a} style={{padding:"9px 6px",textAlign:"right",color:GRL,fontSize:10,whiteSpace:"nowrap"}}>{a}</th>)}
+                <th style={{padding:"9px 8px",textAlign:"center",color:GRL,fontSize:10}}>DISP.</th>
               </tr></thead>
               <tbody>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
                 const tot=calcTotal(p),disp=tot>0;
                 return <tr key={i} style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
                   <td style={{padding:"7px 12px",fontFamily:"monospace",color:GRL,whiteSpace:"nowrap",fontSize:11}}>{p.codigo}</td>
-                  <td style={{padding:"7px 12px",minWidth:300}}>{p.descripcion}</td>
+                  <td style={{padding:"7px 12px",minWidth:260}}>{p.descripcion}</td>
                   {isVend?<>
                     <td style={{padding:"7px 8px",textAlign:"right",color:"#16a34a",fontWeight:600}}>{money(p.publico)}</td>
                     <td style={{padding:"7px 8px",textAlign:"right",color:"#2563eb",fontWeight:600}}>{money(p.distribuidor)}</td>
                     <td style={{padding:"7px 8px",textAlign:"right",color:"#ea580c",fontWeight:600}}>{money(p.asociado)}</td>
                   </>:<td style={{padding:"7px 10px",textAlign:"right",fontWeight:700,color:OR,whiteSpace:"nowrap"}}>{money(getPrecio(p,lista))}</td>}
                   <td style={{padding:"7px 8px",textAlign:"right",fontWeight:700,color:nColor(tot)}}>{stockVis(tot)}</td>
-                  <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
-                  <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:nColor(tot),fontWeight:700,fontSize:10}}>{nLabel(tot)}</span></td>
                   <td style={{padding:"7px 8px",textAlign:"center",color:GRL,fontSize:11}}>{almPpal(p)}</td>
-                  <td style={{padding:"7px 8px",color:GRL,fontSize:10}}>{almsDisp(p)}</td>
+                  {ALMS.map(a=>{
+                    const v=Number(p[a])||0;
+                    return <td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v}</td>;
+                  })}
+                  <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
                 </tr>;
               })}</tbody>
             </table>
