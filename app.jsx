@@ -916,6 +916,10 @@ export default function App(){
       <span style={{color:"#fff",fontSize:14}}>★</span>
       <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:700}}>CONTADO ANTICIPADO: <span style={{color:"#ffe0c0"}}>3% DESCUENTO ADICIONAL</span></span>
     </div>
+    <div style={{background:"#1e3a5f",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
+      <span style={{color:"#60a5fa",fontSize:14}}>💳</span>
+      <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:600}}>Solicita tus compras hasta con <strong style={{color:"#93c5fd"}}>90 días de crédito</strong> con <strong style={{color:"#60a5fa"}}>Tapatía Credit!</strong></span>
+    </div>
     <div style={{padding:mob?12:20,maxWidth:1400,margin:"0 auto"}}>
       <div style={{background:"#fff7ed",borderLeft:"3px solid "+OR,border:"1px solid #fed7aa",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
         <span style={{color:OR,fontWeight:700}}>i</span>
