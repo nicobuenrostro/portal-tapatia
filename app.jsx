@@ -245,7 +245,7 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   // ════════════════════════════════════════════════════════════
   // HEADER — fondo naranja
   // ════════════════════════════════════════════════════════════
-  const HDR = 44;
+  const HDR = 38;
   doc2.setFillColor(255, 107, 6);
   doc2.rect(0, 0, W, HDR, "F");
 
@@ -253,28 +253,28 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   const logoUrl  = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
   const logoData = await loadImageBase64(logoUrl);
   if(logoData){
-    try { doc2.addImage(logoData, "PNG", ML, 6, 52, 17); } catch(e){}
+    try { doc2.addImage(logoData, "PNG", ML, 4, 46, 15); } catch(e){}
   } else {
-    doc2.setTextColor(255,255,255); doc2.setFontSize(16); doc2.setFont("helvetica","bold");
-    doc2.text("GRUPO TAPATIA", ML, 16);
+    doc2.setTextColor(255,255,255); doc2.setFontSize(15); doc2.setFont("helvetica","bold");
+    doc2.text("GRUPO TAPATIA", ML, 13);
   }
 
-  // Datos empresa (columna izquierda, bajo logo)
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(7);
-  doc2.text("Importadores de llantas agricolas, industriales, jardineria y remolques", ML, 27);
-  doc2.text("Tlaquepaque, Jalisco, Mexico  |  ventas@llanteratapatia.com  |  www.tapatia.app", ML, 32);
+  // Datos empresa bajo logo
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(6.5);
+  doc2.text("Importadores de llantas agricolas, industriales, jardineria y remolques", ML, 23);
+  doc2.text("Tlaquepaque, Jalisco, Mexico  |  ventas@llanteratapatia.com  |  www.tapatia.app", ML, 28);
 
-  // Bloque COTIZACION (columna derecha)
-  const BX = W - MR - 56;
+  // Bloque COTIZACION (columna derecha) — sin roundedRect, rect simple
+  const BX = W - MR - 50;
   doc2.setFillColor(200, 70, 0);
-  doc2.roundedRect(BX, 5, 56, 34, 2, 2, "F");
+  doc2.rect(BX, 4, 50, 30, "F");
   doc2.setTextColor(255,255,255);
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(13);
-  doc2.text("COTIZACION", BX + 28, 16, {align:"center"});
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(12);
+  doc2.text("COTIZACION", BX + 25, 14, {align:"center"});
   doc2.setFont("helvetica","normal"); doc2.setFontSize(9);
-  doc2.text(folio, BX + 28, 24, {align:"center"});
+  doc2.text(folio, BX + 25, 22, {align:"center"});
   doc2.setFontSize(7);
-  doc2.text(fecha, BX + 28, 30, {align:"center"});
+  doc2.text(fecha, BX + 25, 28, {align:"center"});
 
   // ════════════════════════════════════════════════════════════
   // BLOQUE DATOS DE COTIZACION
@@ -328,17 +328,16 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
 
   doc2.autoTable({
     startY: y,
-    head:   [["#","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
+    head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
     body:   rows,
     margin: {left: ML, right: MR},
     styles: {
       font: "helvetica",
       fontSize: 8,
-      cellPadding: {top:3, bottom:3, left:3, right:3},
+      cellPadding: {top:3.5, bottom:3.5, left:3, right:3},
       overflow: "linebreak",
       textColor: [40,40,40],
-      lineColor: [220,220,220],
-      lineWidth: 0.15,
+      lineWidth: 0,
     },
     headStyles: {
       fillColor:  [255,107,6],
@@ -347,10 +346,11 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
       fontSize:   7.5,
       halign:     "center",
       cellPadding:{top:4, bottom:4, left:3, right:3},
+      lineWidth:  0,
     },
-    alternateRowStyles: {fillColor:[250,250,250]},
+    alternateRowStyles: {fillColor:[248,248,248]},
     columnStyles: {
-      0: {halign:"center", cellWidth:7},
+      0: {halign:"center", cellWidth:10},
       1: {halign:"left",   cellWidth:32},
       2: {halign:"left",   cellWidth:"auto"},
       3: {halign:"center", cellWidth:13},
@@ -367,46 +367,46 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   const total    = subtotal + iva;
   const fmt      = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
 
-  let ty = doc2.lastAutoTable.finalY + 5;
-  const TW  = 80;   // ancho del bloque totales
-  const TX  = W - MR - TW;  // x inicio bloque
+  let ty = doc2.lastAutoTable.finalY + 6;
+  const TW  = 78;
+  const TX  = W - MR - TW;
 
-  // Fondo bloque totales
+  // Fondo bloque totales — altura fija para los 3 renglones + total
   doc2.setFillColor(248,248,248);
-  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.2);
-  doc2.roundedRect(TX, ty, TW, 30, 2, 2, "FD");
+  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.15);
+  doc2.rect(TX, ty, TW, 32, "FD");
 
   const tLabelX = TX + 4;
   const tValueX = TX + TW - 4;
-  const tLH     = 6.5;
-  let   tY      = ty + 8;
+  const tLH     = 7;
+  let   tY      = ty + 7;
 
   // Subtotal
   doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
   doc2.text("Subtotal:", tLabelX, tY);
-  doc2.setTextColor(30,30,30);
+  doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
   doc2.text(fmt(subtotal), tValueX, tY, {align:"right"}); tY += tLH;
 
   // IVA 16%
   doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
   doc2.text("IVA (16%):", tLabelX, tY);
-  doc2.setTextColor(30,30,30);
-  doc2.text(fmt(iva), tValueX, tY, {align:"right"}); tY += tLH - 1;
+  doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
+  doc2.text(fmt(iva), tValueX, tY, {align:"right"}); tY += tLH;
 
-  // Línea divisora naranja
+  // Nota IVA agricola (pequeña, dentro del bloque)
+  doc2.setFont("helvetica","italic"); doc2.setFontSize(6); doc2.setTextColor(160,160,160);
+  doc2.text("* Prod. agricolas: IVA = $0.00", tLabelX, tY); tY += 5;
+
+  // Línea divisora
   doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
-  doc2.line(TX + 3, tY, TX + TW - 3, tY); tY += 3;
+  doc2.line(TX + 2, tY - 1, TX + TW - 2, tY - 1);
 
-  // Total destacado
+  // Total destacado — rect naranja pegado al borde inferior del bloque
   doc2.setFillColor(255,107,6);
-  doc2.roundedRect(TX + 2, tY - 1, TW - 4, 9, 1, 1, "F");
+  doc2.rect(TX, ty + 23, TW, 9, "F");
   doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
-  doc2.text("TOTAL:", tLabelX + 1, tY + 6);
-  doc2.text(fmt(total), tValueX - 1, tY + 6, {align:"right"});
-
-  // Nota IVA agricola
-  doc2.setFont("helvetica","italic"); doc2.setFontSize(6.5); doc2.setTextColor(140,140,140);
-  doc2.text("* Productos agricolas no causan IVA (IVA = $0.00 en esos casos)", TX, ty + 32);
+  doc2.text("TOTAL:", tLabelX + 1, ty + 29.5);
+  doc2.text(fmt(total), tValueX - 1, ty + 29.5, {align:"right"});
 
   // ════════════════════════════════════════════════════════════
   // OBSERVACIONES
@@ -431,27 +431,39 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   // Si se sale de la página, nueva página
   if(by2 + 30 > 270){ doc2.addPage(); by2 = 15; }
 
+  // Bloque bancario — ancho completo, 2 columnas
   doc2.setFillColor(235,244,255);
-  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.2);
-  doc2.roundedRect(ML, by2, CW, 22, 2, 2, "FD");
+  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.15);
+  doc2.rect(ML, by2, CW, 24, "FD");
 
   doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(0,80,180);
-  doc2.text("DATOS PARA TRANSFERENCIA / DEPOSITO", ML + 4, by2 + 5);
-  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.2);
-  doc2.line(ML + 4, by2 + 6.5, ML + CW - 4, by2 + 6.5);
+  doc2.text("DATOS PARA DEPOSITO / TRANSFERENCIA", ML + 4, by2 + 5);
+  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.15);
+  doc2.line(ML + 3, by2 + 6.5, ML + CW - 3, by2 + 6.5);
 
-  const bRow = (label, value, x1, x2, yy) => {
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
-    doc2.text(label, x1, yy);
-    doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
-    doc2.text(value, x2, yy);
-  };
+  const bC1 = ML + 4, bC2 = ML + 20, bC3 = ML + CW/2 + 4, bC4 = ML + CW/2 + 18;
 
-  const bC1 = ML + 4, bC2 = ML + 22, bC3 = ML + CW/2 + 4, bC4 = ML + CW/2 + 20;
-  bRow("Banco:",    "BBVA Bancomer",                      bC1, bC2, by2 + 12);
-  bRow("Titular:",  "Comercial Llantera Tapatia SA de CV", bC3, bC4, by2 + 12);
-  bRow("Cuenta:",   "0154483138",                         bC1, bC2, by2 + 18);
-  bRow("CLABE:",    "012320001544831389",                  bC3, bC4, by2 + 18);
+  // Fila 1: Banco | Titular
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
+  doc2.text("Banco:", bC1, by2 + 12);
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(20,20,20);
+  doc2.text("BBVA", bC2, by2 + 12);
+
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
+  doc2.text("Titular:", bC3, by2 + 12);
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(20,20,20);
+  doc2.text("Comercial Llantera Tapatia SA de CV", bC4, by2 + 12);
+
+  // Fila 2: Cuenta | CLABE — ambas en negritas
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
+  doc2.text("No. Cuenta:", bC1, by2 + 19);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(20,20,20);
+  doc2.text("0154483138", bC2, by2 + 19);
+
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
+  doc2.text("CLABE:", bC3, by2 + 19);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(20,20,20);
+  doc2.text("012320001544831389", bC4, by2 + 19);
 
   // ════════════════════════════════════════════════════════════
   // FOOTER
