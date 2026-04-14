@@ -343,13 +343,14 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
     headStyles: {fillColor:[255,107,6], textColor:255, fontStyle:"bold", fontSize:8, halign:"center"},
     bodyStyles: {fontSize:8, textColor:[40,40,40]},
     columnStyles: {
-      0:{halign:"center", cellWidth:8},
-      1:{cellWidth:30},
-      2:{cellWidth:80},
-      3:{halign:"center", cellWidth:14},
-      4:{halign:"right", cellWidth:25},
-      5:{halign:"right", cellWidth:25},
+      0:{halign:"center", cellWidth:7},
+      1:{cellWidth:28},
+      2:{cellWidth:82},
+      3:{halign:"center", cellWidth:13},
+      4:{halign:"right", cellWidth:22},
+      5:{halign:"right", cellWidth:22},
     },
+    tableWidth: 180,
     alternateRowStyles:{fillColor:[250,250,250]},
     tableLineColor:[220,220,220],
     tableLineWidth:0.1,
@@ -357,22 +358,23 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
 
   const subtotal = items.reduce((s,it)=>s+it.precio*it.cantidad,0);
   const finalY   = doc2.lastAutoTable.finalY + 6;
+  const RX = W - M; // margen derecho = 195
   doc2.setFillColor(245,245,245);
-  doc2.rect(120, finalY-4, 75, 20, "F");
+  doc2.rect(120, finalY-4, RX-120, 20, "F");
   doc2.setFont("helvetica","normal"); doc2.setFontSize(9); doc2.setTextColor(80,80,80);
   doc2.text("Subtotal:", 122, finalY+2);
   doc2.text("IVA:", 122, finalY+8);
   doc2.setFont("helvetica","bold"); doc2.setFontSize(10); doc2.setTextColor(40,40,40);
-  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+2, {align:"right"});
-  doc2.setFontSize(8); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
-  doc2.text("(Según tipo de producto — consultar factura)", 193, finalY+8, {align:"right"});
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), RX, finalY+2, {align:"right"});
+  doc2.setFontSize(7.5); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
+  doc2.text("(Segun tipo de producto - consultar factura)", RX, finalY+8, {align:"right"});
   doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.5);
-  doc2.line(120, finalY+10, 195, finalY+10);
+  doc2.line(120, finalY+10, RX, finalY+10);
   doc2.setFillColor(255,107,6);
-  doc2.rect(120, finalY+11, 75, 9, "F");
+  doc2.rect(120, finalY+11, RX-120, 9, "F");
   doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(11);
   doc2.text("TOTAL:", 122, finalY+17.5);
-  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+17.5, {align:"right"});
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), RX, finalY+17.5, {align:"right"});
 
   if(nota){
     const ny = finalY+28;
@@ -395,7 +397,7 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
 
   // Ícono / etiqueta banco
   doc2.setFontSize(8); doc2.setFont("helvetica","bold"); doc2.setTextColor(0,80,180);
-  doc2.text("🏦  DATOS PARA TRANSFERENCIA / DEPÓSITO", M+3, bankStartY+6);
+  doc2.text("DATOS PARA TRANSFERENCIA / DEPOSITO", M+3, bankStartY+6);
 
   // Línea separadora
   doc2.setDrawColor(180,210,255); doc2.setLineWidth(0.2);
