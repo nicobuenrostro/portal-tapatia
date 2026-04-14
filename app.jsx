@@ -1054,8 +1054,40 @@ export default function App(){
           fecha:new Date().toISOString(),
         });
 
+        // ── Limpiar respaldos viejos — mantener solo los 3 más recientes ────────────
+        try {
+          const MAX_RESPALDOS = 3;
+          const bkIndexRef = doc(db,"_meta","respaldos_index");
+          const bkIndexSnap = await getDoc(bkIndexRef);
+          let bkList = bkIndexSnap.exists() ? (bkIndexSnap.data().lista||[]) : [];
+
+          // Registrar el respaldo recién creado
+          if(oldSnap.docs.length > 0) bkList.push(`respaldo_${ts}`);
+
+          // Si hay más de 3, borrar los más viejos
+          if(bkList.length > MAX_RESPALDOS){
+            const aEliminar = bkList.slice(0, bkList.length - MAX_RESPALDOS);
+            for(const colName of aEliminar){
+              try {
+                const oldBkSnap = await getDocs(collection(db, colName));
+                if(!oldBkSnap.empty){
+                  const docs = oldBkSnap.docs;
+                  for(let ci=0; ci<docs.length; ci+=400){
+                    const delB = writeBatch(db);
+                    docs.slice(ci,ci+400).forEach(d=>delB.delete(d.ref));
+                    await delB.commit();
+                  }
+                }
+              } catch(bkErr){ console.warn("No se pudo borrar:",colName,bkErr); }
+            }
+            bkList = bkList.slice(bkList.length - MAX_RESPALDOS);
+          }
+
+          await setDoc(bkIndexRef,{lista:bkList,actualizado:new Date().toISOString()});
+        } catch(bkErr){ console.warn("Error respaldos:",bkErr); }
+
         await loadProducts();
-        setMsg(`✅ ${mapped.length} productos guardados y verificados en Firebase.`);
+        setMsg(`✅ ${mapped.length} productos guardados. Se conservan los últimos 3 respaldos.`);
       } catch(err){
         setMsg("❌ ERROR: "+err.message);
         console.error("Error al subir CSV:",err);
