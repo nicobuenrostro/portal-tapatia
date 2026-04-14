@@ -475,29 +475,32 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
   doc2.text("TOTAL:", tLX + 1, tY + 7);
   doc2.text(fmt(granTotal), tVX - 1, tY + 7, {align:"right"});
+  // Posición real donde terminó el bloque de totales
+  const totalesBottomY = tY + 10;
 
   // ════════════════════════════════════════════════════════════
   // OBSERVACIONES
   // ════════════════════════════════════════════════════════════
+  let afterContentY = totalesBottomY + 6;
   if(nota && nota.trim()){
-    let ny = ty + 38;
-    doc2.setFillColor(255,251,235);
-    doc2.setDrawColor(253,211,77); doc2.setLineWidth(0.2);
     const notaLines = doc2.splitTextToSize(nota.trim(), CW - 8);
     const notaH = 8 + notaLines.length * 4.5;
-    doc2.roundedRect(ML, ny, CW, notaH, 2, 2, "FD");
+    doc2.setFillColor(255,251,235);
+    doc2.setDrawColor(253,211,77); doc2.setLineWidth(0.2);
+    doc2.roundedRect(ML, afterContentY, CW, notaH, 2, 2, "FD");
     doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(180,120,0);
-    doc2.text("OBSERVACIONES:", ML + 4, ny + 5);
+    doc2.text("OBSERVACIONES:", ML + 4, afterContentY + 5);
     doc2.setFont("helvetica","normal"); doc2.setTextColor(60,60,60);
-    doc2.text(notaLines, ML + 4, ny + 10);
+    doc2.text(notaLines, ML + 4, afterContentY + 10);
+    afterContentY += notaH + 6;
   }
 
   // ════════════════════════════════════════════════════════════
-  // DATOS BANCARIOS
+  // DATOS BANCARIOS — siempre debajo de todo el contenido
   // ════════════════════════════════════════════════════════════
-  let by2 = doc2.lastAutoTable.finalY + (nota&&nota.trim() ? 48 : 42);
+  let by2 = afterContentY + 4;
   // Si se sale de la página, nueva página
-  if(by2 + 30 > 270){ doc2.addPage(); by2 = 15; }
+  if(by2 + 30 > 272){ doc2.addPage(); by2 = 15; }
 
   // Bloque bancario — ancho completo, 2 columnas
   doc2.setFillColor(235,244,255);
