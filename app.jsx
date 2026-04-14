@@ -316,97 +316,165 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   // ════════════════════════════════════════════════════════════
   // TABLA DE PRODUCTOS
   // ════════════════════════════════════════════════════════════
-  y = HDR + 6 + 26 + 6;
-  const rows = items.map((it, i) => [
-    i + 1,
-    it.codigo,
-    it.descripcion,
-    it.cantidad,
-    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio),
-    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio * it.cantidad),
-  ]);
+  y = HDR + 6 + 26 + 8;
 
-  doc2.autoTable({
-    startY: y,
-    head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
-    body:   rows,
-    margin: {left: ML, right: MR},
+  // Separar productos con y sin IVA
+  const conIva  = items.filter(it => String(it.iva||"NO").toUpperCase()==="SI");
+  const sinIva  = items.filter(it => String(it.iva||"NO").toUpperCase()!=="SI");
+
+  const fmt = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
+
+  const tableStyles = {
     styles: {
-      font: "helvetica",
-      fontSize: 8,
-      cellPadding: {top:3.5, bottom:3.5, left:3, right:3},
-      overflow: "linebreak",
-      textColor: [40,40,40],
-      lineWidth: 0,
+      font:"helvetica", fontSize:8,
+      cellPadding:{top:3.5,bottom:3.5,left:3,right:3},
+      overflow:"linebreak", textColor:[40,40,40], lineWidth:0,
     },
     headStyles: {
-      fillColor:  [255,107,6],
-      textColor:  [255,255,255],
-      fontStyle:  "bold",
-      fontSize:   7.5,
-      halign:     "center",
-      cellPadding:{top:4, bottom:4, left:3, right:3},
-      lineWidth:  0,
+      fillColor:[255,107,6], textColor:[255,255,255],
+      fontStyle:"bold", fontSize:7.5, halign:"center",
+      cellPadding:{top:4,bottom:4,left:3,right:3}, lineWidth:0,
     },
-    alternateRowStyles: {fillColor:[248,248,248]},
-    columnStyles: {
-      0: {halign:"center", cellWidth:10},
-      1: {halign:"left",   cellWidth:32},
-      2: {halign:"left",   cellWidth:"auto"},
-      3: {halign:"center", cellWidth:13},
-      4: {halign:"right",  cellWidth:24},
-      5: {halign:"right",  cellWidth:24},
-    },
-  });
+    alternateRowStyles:{fillColor:[248,248,248]},
+    margin:{left:ML, right:MR},
+  };
+
+  const colStyles6 = {
+    0:{halign:"center",cellWidth:10},
+    1:{halign:"left",  cellWidth:32},
+    2:{halign:"left",  cellWidth:"auto"},
+    3:{halign:"center",cellWidth:13},
+    4:{halign:"right", cellWidth:24},
+    5:{halign:"right", cellWidth:24},
+  };
+
+  // ── Tabla productos SIN IVA ──────────────────────────────
+  if(sinIva.length > 0){
+    // Subtítulo
+    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
+    doc2.text("Productos sin IVA", ML, y);
+    y += 3;
+    const rowsSin = sinIva.map((it,i)=>[
+      i+1, it.codigo, it.descripcion, it.cantidad,
+      fmt(it.precio),
+      fmt(it.precio * it.cantidad),
+    ]);
+    doc2.autoTable({
+      startY: y,
+      head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
+      body:   rowsSin,
+      columnStyles: colStyles6,
+      ...tableStyles,
+    });
+    y = doc2.lastAutoTable.finalY + 4;
+  }
+
+  // ── Tabla productos CON IVA ──────────────────────────────
+  if(conIva.length > 0){
+    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
+    doc2.text("Productos con IVA (16%)", ML, y);
+    y += 3;
+    const rowsCon = conIva.map((it,i)=>{
+      const imp    = it.precio * it.cantidad;
+      const ivaP   = imp * 0.16;
+      const totP   = imp + ivaP;
+      return [
+        i+1, it.codigo, it.descripcion, it.cantidad,
+        fmt(it.precio), fmt(imp), fmt(ivaP), fmt(totP),
+      ];
+    });
+    doc2.autoTable({
+      startY: y,
+      head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE","IVA 16%","TOTAL"]],
+      body:   rowsCon,
+      columnStyles: {
+        0:{halign:"center",cellWidth:10},
+        1:{halign:"left",  cellWidth:28},
+        2:{halign:"left",  cellWidth:"auto"},
+        3:{halign:"center",cellWidth:11},
+        4:{halign:"right", cellWidth:20},
+        5:{halign:"right", cellWidth:20},
+        6:{halign:"right", cellWidth:18},
+        7:{halign:"right", cellWidth:20},
+      },
+      ...tableStyles,
+    });
+    y = doc2.lastAutoTable.finalY + 4;
+  }
 
   // ════════════════════════════════════════════════════════════
-  // TOTALES
+  // TOTALES — calculados por partida
   // ════════════════════════════════════════════════════════════
-  const subtotal = items.reduce((s, it) => s + it.precio * it.cantidad, 0);
-  const iva      = subtotal * 0.16;
-  const total    = subtotal + iva;
-  const fmt      = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
+  const subtSin  = sinIva.reduce((s,it)=>s + it.precio*it.cantidad, 0);
+  const subtCon  = conIva.reduce((s,it)=>s + it.precio*it.cantidad, 0);
+  const ivaTotal = conIva.reduce((s,it)=>s + it.precio*it.cantidad*0.16, 0);
+  const granTotal= subtSin + subtCon + ivaTotal;
 
-  let ty = doc2.lastAutoTable.finalY + 6;
-  const TW  = 78;
-  const TX  = W - MR - TW;
+  const hayMixto = sinIva.length > 0 && conIva.length > 0;
 
-  // Fondo bloque totales — altura fija para los 3 renglones + total
+  let ty = y + 2;
+  const TW = 82;
+  const TX = W - MR - TW;
+
+  // Calcular altura del bloque según filas necesarias
+  const filas = hayMixto ? 5 : (conIva.length>0 ? 4 : 2);
+  const boxH  = 8 + filas * 7 + 10; // padding + filas + barra total
+
   doc2.setFillColor(248,248,248);
   doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.15);
-  doc2.rect(TX, ty, TW, 32, "FD");
+  doc2.rect(TX, ty, TW, boxH, "FD");
 
-  const tLabelX = TX + 4;
-  const tValueX = TX + TW - 4;
-  const tLH     = 7;
-  let   tY      = ty + 7;
+  const tLX = TX + 4;
+  const tVX = TX + TW - 4;
+  const tLH = 7;
+  let   tY  = ty + 7;
 
-  // Subtotal
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
-  doc2.text("Subtotal:", tLabelX, tY);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
-  doc2.text(fmt(subtotal), tValueX, tY, {align:"right"}); tY += tLH;
+  if(hayMixto){
+    // Subtotal sin IVA
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
+    doc2.text("Subtotal sin IVA:", tLX, tY);
+    doc2.setTextColor(30,30,30);
+    doc2.text(fmt(subtSin), tVX, tY, {align:"right"}); tY += tLH;
+    // Subtotal con IVA
+    doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80);
+    doc2.text("Subtotal con IVA:", tLX, tY);
+    doc2.setTextColor(30,30,30);
+    doc2.text(fmt(subtCon), tVX, tY, {align:"right"}); tY += tLH;
+  } else if(sinIva.length > 0){
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
+    doc2.text("Subtotal:", tLX, tY);
+    doc2.setTextColor(30,30,30);
+    doc2.text(fmt(subtSin), tVX, tY, {align:"right"}); tY += tLH;
+  } else {
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
+    doc2.text("Subtotal:", tLX, tY);
+    doc2.setTextColor(30,30,30);
+    doc2.text(fmt(subtCon), tVX, tY, {align:"right"}); tY += tLH;
+  }
 
-  // IVA 16%
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
-  doc2.text("IVA (16%):", tLabelX, tY);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
-  doc2.text(fmt(iva), tValueX, tY, {align:"right"}); tY += tLH;
-
-  // Nota IVA agricola (pequeña, dentro del bloque)
-  doc2.setFont("helvetica","italic"); doc2.setFontSize(6); doc2.setTextColor(160,160,160);
-  doc2.text("* Prod. agricolas: IVA = $0.00", tLabelX, tY); tY += 5;
+  // IVA total (solo si hay productos con IVA)
+  if(conIva.length > 0){
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
+    doc2.text("IVA (16%):", tLX, tY);
+    doc2.setTextColor(30,30,30);
+    doc2.text(fmt(ivaTotal), tVX, tY, {align:"right"}); tY += tLH;
+  } else {
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
+    doc2.text("IVA:", tLX, tY);
+    doc2.setFont("helvetica","italic"); doc2.setTextColor(160,160,160);
+    doc2.text("$0.00 (productos agricolas no causan IVA)", tVX, tY, {align:"right"}); tY += tLH;
+  }
 
   // Línea divisora
   doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
-  doc2.line(TX + 2, tY - 1, TX + TW - 2, tY - 1);
+  doc2.line(TX + 2, tY, TX + TW - 2, tY); tY += 2;
 
-  // Total destacado — rect naranja pegado al borde inferior del bloque
+  // Gran total naranja
   doc2.setFillColor(255,107,6);
-  doc2.rect(TX, ty + 23, TW, 9, "F");
+  doc2.rect(TX, tY, TW, 10, "F");
   doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
-  doc2.text("TOTAL:", tLabelX + 1, ty + 29.5);
-  doc2.text(fmt(total), tValueX - 1, ty + 29.5, {align:"right"});
+  doc2.text("TOTAL:", tLX + 1, tY + 7);
+  doc2.text(fmt(granTotal), tVX - 1, tY + 7, {align:"right"});
 
   // ════════════════════════════════════════════════════════════
   // OBSERVACIONES
@@ -532,10 +600,13 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
       const folio=await getNextFolio();
       setFolioMsg(`📄 ${folio} — generando PDF...`);
       await generarPDF({folio,session,items:cart,nota,vigencia,clienteLabel});
+      const subtotalGuardar = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
+      const ivaGuardar      = cart.filter(it=>String(it.iva||"NO").toUpperCase()==="SI").reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
       await setDoc(doc(db,"cotizaciones",folio),{
         folio,usuario:session.usuario,nombre:session.nombre,
         empresa:session.empresa||"",cliente:clienteLabel,
-        items:cart,subtotal,nota,vigencia,fecha:new Date().toISOString(),
+        items:cart,subtotal:subtotalGuardar+ivaGuardar,
+        iva:ivaGuardar,nota,vigencia,fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
       setTimeout(()=>{setCart([]);onClose();},2000);
@@ -1060,6 +1131,7 @@ export default function App(){
           publico:     Number(r.PUBLICO||r["PÚBLICO"]||0),
           distribuidor:Number(r.DISTRIBUIDOR||0),
           asociado:    Number(r.ASOCIADO||0),
+          iva:         String(r.IVA||"NO").trim().toUpperCase()==="SI"?"SI":"NO",
           actualizado: new Date().toISOString(),
         })).filter(p=>p.codigo);
 
@@ -1252,6 +1324,7 @@ export default function App(){
         precio:      precioVal,
         tipoPrecio,
         cantidad:    1,
+        iva:         String(p.iva||"NO").trim().toUpperCase()==="SI"?"SI":"NO",
         _publico:     Number(p.publico)||0,
         _distribuidor:Number(p.distribuidor)||0,
         _asociado:    Number(p.asociado)||0,
