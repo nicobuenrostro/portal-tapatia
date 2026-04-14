@@ -383,13 +383,49 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
     doc2.text(lines, M, ny+5);
   }
 
+  // ── Sección datos bancarios ───────────────────────────────
+  const bankY = doc2.lastAutoTable.finalY + (nota ? 28 : 10);
+  // Verificar que no se salga de la página (dejar espacio para footer)
+  const bankStartY = Math.max(bankY, doc2.lastAutoTable.finalY + 8);
+
+  doc2.setFillColor(240,247,255);
+  doc2.setDrawColor(0,100,200);
+  doc2.setLineWidth(0.3);
+  doc2.rect(M, bankStartY, W-M*2, 22, "FD");
+
+  // Ícono / etiqueta banco
+  doc2.setFontSize(8); doc2.setFont("helvetica","bold"); doc2.setTextColor(0,80,180);
+  doc2.text("🏦  DATOS PARA TRANSFERENCIA / DEPÓSITO", M+3, bankStartY+6);
+
+  // Línea separadora
+  doc2.setDrawColor(180,210,255); doc2.setLineWidth(0.2);
+  doc2.line(M+3, bankStartY+8, W-M-3, bankStartY+8);
+
+  const bx1=M+3, bx2=M+28, bx3=105, bx4=128;
+  const by=bankStartY+13;
+  doc2.setFontSize(7.5); doc2.setTextColor(80,80,80); doc2.setFont("helvetica","bold");
+  doc2.text("Banco:", bx1, by);
+  doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
+  doc2.text("BBVA Bancomer", bx2, by);
+
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
+  doc2.text("Titular:", bx3, by);
+  doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
+  doc2.text("Comercial Llantera Tapatía SA de CV", bx4, by);
+
+  const by2=bankStartY+18;
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
+  doc2.text("No. Cuenta:", bx1, by2);
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(20,20,20);
+  doc2.text("0154483138", bx2, by2);
+
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
+  doc2.text("CLABE:", bx3, by2);
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(20,20,20);
+  doc2.text("012320001544831389", bx4, by2);
+
+  // ── Footer ───────────────────────────────────────────────
   const py = 282;
-  doc2.setFillColor(255,107,6);
-  doc2.rect(0, py, W, 15, "F");
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5);
-  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.", W/2, py+5, {align:"center"});
-  doc2.text("Los precios están sujetos a cambios sin previo aviso. Precios antes de IVA salvo productos agrícolas.", W/2, py+9, {align:"center"});
-  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`, W/2, py+13, {align:"center"});
 
   doc2.save(`Cotizacion_${folio}.pdf`);
 }
