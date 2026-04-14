@@ -50,14 +50,11 @@ async function hashPassword(pwd){
 async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 
 // ── Firebase — lectura segura ─────────────────────────────────
-// NUNCA pisa el estado si hay error — retorna null en caso de fallo
 async function fbGetUsuarios(){
   try {
-    // Sin orderBy para evitar error si falta índice o campo nombre
     const snap=await getDocs(collection(db,"usuarios"));
     if(snap.empty) return [];
     const data=snap.docs.map(d=>({id:d.id,...d.data()}));
-    // Ordenar en cliente para no depender de índices Firebase
     return data.sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   } catch(e){
     console.error("Error leyendo usuarios:",e);
@@ -67,11 +64,9 @@ async function fbGetUsuarios(){
 
 async function fbGetProductos(){
   try {
-    // Sin orderBy para evitar error si falta índice
     const snap=await getDocs(collection(db,"productos"));
     if(snap.empty) return [];
     const data=snap.docs.map(d=>({id:d.id,...d.data()}));
-    // Ordenar en cliente
     return data.sort((a,b)=>(a.codigo||"").localeCompare(b.codigo||""));
   } catch(e){
     console.error("Error leyendo productos:",e);
@@ -130,9 +125,8 @@ function detectTipo(s){
 // ── Permisos por rol ──────────────────────────────────────────
 function canDo(session, accion){
   const rol = session?.rol;
-  if(rol==="superadmin") return true; // acceso total
+  if(rol==="superadmin") return true;
   if(rol==="admin"){
-    // Solo puede: ver productos, subir CSV, crear/editar clientes y vendedores
     const permitido=["productos","clientes","subir_csv","crear_cliente","editar_cliente","toggle_estatus","eliminar_cliente"];
     return permitido.includes(accion);
   }
@@ -230,11 +224,9 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
   const W = 210, M = 15;
 
-  // Fondo header naranja
   doc2.setFillColor(255,107,6);
   doc2.rect(0, 0, W, 38, "F");
 
-  // Logo texto (si no hay imagen embebida usamos texto estilizado)
   doc2.setTextColor(255,255,255);
   doc2.setFontSize(22);
   doc2.setFont("helvetica","bold");
@@ -245,7 +237,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   doc2.text("Guadalajara, Jalisco, México  |  ventas@grupotapatia.com", M, 27);
   doc2.text("www.tapatia.app", M, 32);
 
-  // Etiqueta COTIZACIÓN
   doc2.setFillColor(230,90,0);
   doc2.rect(140, 6, 55, 26, "F");
   doc2.setTextColor(255,255,255);
@@ -255,7 +246,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   doc2.setFontSize(11);
   doc2.text(folio, 167.5, 26, {align:"center"});
 
-  // Datos cotización
   const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
   const vig   = vigencia || "15 días naturales";
   doc2.setTextColor(60,60,60);
@@ -280,7 +270,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   doc2.setFont("helvetica","normal");
   doc2.text(`Cliente:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.empresa||session.nombre, M+22, y);
 
-  // Tabla de productos
   y += 10;
   const rows = items.map((it,i) => [
     i+1,
@@ -310,7 +299,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
     tableLineWidth:0.1,
   });
 
-  // Totales
   const subtotal = items.reduce((s,it)=>s+it.precio*it.cantidad,0);
   const finalY   = doc2.lastAutoTable.finalY + 6;
   doc2.setFillColor(245,245,245);
@@ -322,7 +310,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+2, {align:"right"});
   doc2.setFontSize(8); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
   doc2.text("(Según tipo de producto — consultar factura)", 193, finalY+8, {align:"right"});
-  // Línea separadora
   doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.5);
   doc2.line(120, finalY+10, 195, finalY+10);
   doc2.setFillColor(255,107,6);
@@ -331,7 +318,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
   doc2.text("TOTAL:", 122, finalY+17.5);
   doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+17.5, {align:"right"});
 
-  // Notas
   if(nota){
     const ny = finalY+28;
     doc2.setTextColor(60,60,60); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
@@ -341,7 +327,6 @@ async function generarPDF({folio, session, items, nota, vigencia}){
     doc2.text(lines, M, ny+5);
   }
 
-  // Footer
   const py = 282;
   doc2.setFillColor(255,107,6);
   doc2.rect(0, py, W, 15, "F");
@@ -354,7 +339,7 @@ async function generarPDF({folio, session, items, nota, vigencia}){
 }
 
 // ── Carrito de cotización ─────────────────────────────────────
-function CartPanel({cart, setCart, session, db, onClose}){
+function CartPanel({cart, setCart, session, db, onClose, mob}){
   const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
   const [nota, setNota] = useState("");
   const [vigencia, setVigencia] = useState("15 días naturales");
@@ -364,143 +349,236 @@ function CartPanel({cart, setCart, session, db, onClose}){
   const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad, 0);
   const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
 
-  function updCantidad(idx, val){
-    const n = Math.max(1, parseInt(val)||1);
+  function updCantidad(idx,val){
+    const n=Math.max(1,parseInt(val)||1);
     setCart(prev=>prev.map((it,i)=>i===idx?{...it,cantidad:n}:it));
   }
-  function updPrecio(idx, tipo){
+  function updPrecio(idx,tipo){
     setCart(prev=>prev.map((it,i)=>{
-      if(i!==idx) return it;
-      const p = tipo==="publico"?it._publico:tipo==="distribuidor"?it._distribuidor:it._asociado;
-      return {...it, precio:p, tipoPrecio:tipo};
+      if(i!==idx)return it;
+      const p=tipo==="publico"?it._publico:tipo==="distribuidor"?it._distribuidor:it._asociado;
+      return{...it,precio:p,tipoPrecio:tipo};
     }));
   }
-  function remove(idx){ setCart(prev=>prev.filter((_,i)=>i!==idx)); }
+  function remove(idx){setCart(prev=>prev.filter((_,i)=>i!==idx));}
 
   async function getNextFolio(){
-    const uid = session.id||session.usuario;
-    const ref  = doc(db,"folios",uid);
-    const snap = await getDoc(ref);
-    const current = snap.exists() ? (snap.data().ultimo||0) : 0;
-    const next = current + 1;
-    await setDoc(ref,{ultimo:next, usuario:session.usuario, actualizado:new Date().toISOString()},{merge:true});
-    const prefix = session.usuario.substring(0,3).toUpperCase();
-    return `COT-${prefix}-${String(next).padStart(4,"0")}`;
+    const uid=session.id||session.usuario;
+    const ref=doc(db,"folios",uid);
+    const snap=await getDoc(ref);
+    const current=snap.exists()?(snap.data().ultimo||0):0;
+    const next=current+1;
+    await setDoc(ref,{ultimo:next,usuario:session.usuario,actualizado:new Date().toISOString()},{merge:true});
+    const prefix=session.usuario.substring(0,3).toUpperCase();
+    return`COT-${prefix}-${String(next).padStart(4,"0")}`;
   }
 
   async function generarCotizacion(){
     if(cart.length===0){setFolioMsg("❌ Agrega al menos un producto.");return;}
-    setGenerating(true); setFolioMsg("Generando folio...");
-    try {
-      const folio = await getNextFolio();
-      setFolioMsg(`📄 Folio: ${folio} — generando PDF...`);
-      await generarPDF({folio, session, items:cart, nota, vigencia});
-      // Guardar cotización en Firebase
+    setGenerating(true);setFolioMsg("Generando folio...");
+    try{
+      const folio=await getNextFolio();
+      setFolioMsg(`📄 ${folio} — generando PDF...`);
+      await generarPDF({folio,session,items:cart,nota,vigencia});
       await setDoc(doc(db,"cotizaciones",folio),{
-        folio, usuario:session.usuario, nombre:session.nombre,
-        empresa:session.empresa||"", items:cart,
-        subtotal, nota, vigencia,
-        fecha:new Date().toISOString(),
+        folio,usuario:session.usuario,nombre:session.nombre,
+        empresa:session.empresa||"",items:cart,
+        subtotal,nota,vigencia,fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
-      setTimeout(()=>{ setCart([]); onClose(); },2000);
-    } catch(e){ setFolioMsg("❌ Error: "+e.message); }
+      setTimeout(()=>{setCart([]);onClose();},2000);
+    }catch(e){setFolioMsg("❌ Error: "+e.message);}
     setGenerating(false);
   }
 
   return(
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",justifyContent:"flex-end",fontFamily:"Arial,sans-serif"}}>
-      <div style={{width:"100%",maxWidth:520,background:"#fff",height:"100%",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)"}}>
-        {/* Header */}
-        <div style={{background:OR,padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:2000,display:"flex",justifyContent:"flex-end",fontFamily:"Arial,sans-serif"}}>
+      <div style={{width:"100%",maxWidth:mob?480:560,background:"#fff",height:"100%",display:"flex",flexDirection:"column",boxShadow:"-4px 0 32px rgba(0,0,0,0.2)"}}>
+
+        {/* ── Header ── */}
+        <div style={{background:OR,padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
           <div>
-            <div style={{color:"#fff",fontWeight:700,fontSize:15,letterSpacing:1}}>🧾 COTIZACIÓN</div>
-            <div style={{color:"rgba(255,255,255,0.8)",fontSize:11}}>{cart.length} producto{cart.length!==1?"s":""} · {money2(subtotal)}</div>
+            <div style={{color:"#fff",fontWeight:700,fontSize:16,letterSpacing:1}}>🧾 CARRITO DE COTIZACIÓN</div>
+            <div style={{color:"rgba(255,255,255,0.85)",fontSize:12,marginTop:2}}>
+              {cart.length} producto{cart.length!==1?"s":""} · <strong>{money2(subtotal)}</strong>
+            </div>
           </div>
-          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",width:32,height:32,borderRadius:"50%",cursor:"pointer",fontSize:16,fontWeight:700}}>✕</button>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.25)",border:"none",color:"#fff",width:34,height:34,borderRadius:"50%",cursor:"pointer",fontSize:18,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
         </div>
 
-        {/* Productos */}
-        <div style={{flex:1,overflowY:"auto",padding:16}}>
-          {cart.length===0&&<div style={{textAlign:"center",color:GRL,padding:40,fontSize:13}}>
-            Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo
-          </div>}
+        {/* ── Lista de productos ── */}
+        <div style={{flex:1,overflowY:"auto",padding:"14px 16px",background:"#f9f9f9"}}>
+          {cart.length===0&&(
+            <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
+              <div style={{fontSize:40,marginBottom:12}}>🛒</div>
+              <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>Tu carrito está vacío</div>
+              <div style={{fontSize:12}}>Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo</div>
+            </div>
+          )}
           {cart.map((it,i)=>(
-            <div key={i} style={{border:"1px solid #e5e7eb",borderRadius:6,padding:12,marginBottom:10,background:"#fafafa"}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+            <div key={i} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,padding:"12px 14px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                 <div style={{flex:1,marginRight:8}}>
-                  <div style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</div>
-                  <div style={{fontSize:12,fontWeight:600,lineHeight:1.3,color:"#1a1a1a"}}>{it.descripcion}</div>
+                  <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{it.codigo}</div>
+                  <div style={{fontSize:12,fontWeight:600,color:"#1a1a1a",lineHeight:1.4}}>{it.descripcion}</div>
                 </div>
-                <button onClick={()=>remove(i)} style={{background:"#fee2e2",border:"none",color:"#dc2626",width:24,height:24,borderRadius:"50%",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>✕</button>
+                <button onClick={()=>remove(i)} style={{background:"#fee2e2",border:"none",color:"#dc2626",width:26,height:26,borderRadius:"50%",cursor:"pointer",fontSize:13,fontWeight:700,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
               </div>
+
               <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                {/* Cantidad */}
-                <div style={{display:"flex",alignItems:"center",gap:6}}>
-                  <span style={{fontSize:11,color:GRL}}>Cant:</span>
-                  <div style={{display:"flex",alignItems:"center",border:"1px solid #e5e7eb",borderRadius:4,overflow:"hidden"}}>
-                    <button onClick={()=>updCantidad(i,it.cantidad-1)} style={{background:"#f3f4f6",border:"none",padding:"4px 8px",cursor:"pointer",fontSize:14,fontWeight:700,color:"#374151"}}>−</button>
+                <div style={{display:"flex",alignItems:"center",gap:4}}>
+                  <span style={{fontSize:11,color:GRL,marginRight:2}}>Cant:</span>
+                  <div style={{display:"flex",alignItems:"center",border:"1px solid #d1d5db",borderRadius:6,overflow:"hidden"}}>
+                    <button onClick={()=>updCantidad(i,it.cantidad-1)}
+                      style={{background:"#f3f4f6",border:"none",padding:"5px 10px",cursor:"pointer",fontSize:15,fontWeight:700,color:"#374151",lineHeight:1}}>−</button>
                     <input type="number" min="1" value={it.cantidad} onChange={e=>updCantidad(i,e.target.value)}
-                      style={{width:40,textAlign:"center",border:"none",padding:"4px",fontSize:13,fontWeight:700,outline:"none"}}/>
-                    <button onClick={()=>updCantidad(i,it.cantidad+1)} style={{background:"#f3f4f6",border:"none",padding:"4px 8px",cursor:"pointer",fontSize:14,fontWeight:700,color:"#374151"}}>＋</button>
+                      style={{width:42,textAlign:"center",border:"none",borderLeft:"1px solid #d1d5db",borderRight:"1px solid #d1d5db",padding:"5px 4px",fontSize:13,fontWeight:700,outline:"none"}}/>
+                    <button onClick={()=>updCantidad(i,it.cantidad+1)}
+                      style={{background:"#f3f4f6",border:"none",padding:"5px 10px",cursor:"pointer",fontSize:15,fontWeight:700,color:"#374151",lineHeight:1}}>＋</button>
                   </div>
                 </div>
-                {/* Selector precio para vendedor/admin */}
+
                 {isVend&&(
                   <select value={it.tipoPrecio} onChange={e=>updPrecio(i,e.target.value)}
-                    style={{padding:"4px 8px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:11,color:"#374151",outline:"none",background:"#fff"}}>
+                    style={{padding:"5px 8px",border:"1px solid #d1d5db",borderRadius:6,fontSize:11,color:"#374151",outline:"none",background:"#fff",cursor:"pointer"}}>
                     <option value="publico">Público</option>
                     <option value="distribuidor">Distribuidor</option>
                     <option value="asociado">Asociado</option>
                   </select>
                 )}
-                {/* Precio e importe */}
+
                 <div style={{marginLeft:"auto",textAlign:"right"}}>
-                  <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#1a1a1a"}}>{money2(it.precio)}</strong></div>
-                  <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(it.precio*it.cantidad)}</div>
+                  <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#374151"}}>{money2(it.precio)}</strong></div>
+                  <div style={{fontSize:14,fontWeight:700,color:OR}}>{money2(it.precio*it.cantidad)}</div>
                 </div>
               </div>
             </div>
           ))}
         </div>
 
-        {/* Footer con totales y opciones */}
-        <div style={{borderTop:"1px solid #e5e7eb",padding:16,background:"#f9f9f9"}}>
-          {/* Vigencia */}
-          <div style={{marginBottom:10}}>
-            <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
-            <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
-              style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,outline:"none",background:"#fff"}}>
-              <option>15 días naturales</option>
-              <option>30 días naturales</option>
-              <option>Sujeto a disponibilidad</option>
-            </select>
+        {/* ── Footer ── */}
+        {cart.length>0&&(
+          <div style={{borderTop:"2px solid #e5e7eb",padding:"14px 16px",background:"#fff",flexShrink:0}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:10}}>
+              <div>
+                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
+                <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
+                  style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",background:"#fff"}}>
+                  <option>15 días naturales</option>
+                  <option>30 días naturales</option>
+                  <option>Sujeto a disponibilidad</option>
+                </select>
+              </div>
+              <div>
+                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>OBSERVACIONES</div>
+                <input value={nota} onChange={e=>setNota(e.target.value)}
+                  placeholder="Notas adicionales..."
+                  style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+              </div>
+            </div>
+
+            <div style={{background:"#f9f9f9",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 14px",marginBottom:12}}>
+              <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
+                <span style={{fontSize:12,color:GRL}}>{cart.length} producto{cart.length!==1?"s":""}</span>
+                <span style={{fontSize:12,color:GRL}}>{cart.reduce((s,it)=>s+it.cantidad,0)} piezas total</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #e5e7eb",paddingTop:8,marginTop:4}}>
+                <span style={{fontSize:14,fontWeight:700,color:"#1a1a1a"}}>SUBTOTAL ANTES DE IVA:</span>
+                <span style={{fontSize:20,fontWeight:800,color:OR}}>{money2(subtotal)}</span>
+              </div>
+            </div>
+
+            {folioMsg&&<div style={{fontSize:11,marginBottom:10,padding:"8px 12px",borderRadius:6,
+              background:folioMsg.startsWith("✅")?"#f0fdf4":folioMsg.startsWith("❌")?"#fef2f2":"#fffbeb",
+              color:folioMsg.startsWith("✅")?"#16a34a":folioMsg.startsWith("❌")?"#dc2626":"#d97706",
+              border:`1px solid ${folioMsg.startsWith("✅")?"#bbf7d0":folioMsg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{folioMsg}</div>}
+
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{if(window.confirm("¿Limpiar el carrito?"))setCart([]);}}
+                style={{flex:1,padding:"11px",background:"#f3f4f6",color:"#374151",border:"1px solid #d1d5db",borderRadius:6,cursor:"pointer",fontWeight:600,fontSize:12}}>
+                🗑 Limpiar
+              </button>
+              <button onClick={generarCotizacion} disabled={generating}
+                style={{flex:3,padding:"11px",background:OR,color:"#fff",border:"none",borderRadius:6,
+                  cursor:generating?"wait":"pointer",fontWeight:700,fontSize:13,letterSpacing:0.5,
+                  opacity:generating?0.7:1,boxShadow:"0 2px 8px rgba(255,107,6,0.35)"}}>
+                {generating?"⏳ GENERANDO...":"📄 GENERAR COTIZACIÓN PDF"}
+              </button>
+            </div>
           </div>
-          {/* Notas */}
-          <div style={{marginBottom:12}}>
-            <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>OBSERVACIONES</div>
-            <textarea value={nota} onChange={e=>setNota(e.target.value)} rows={2}
-              placeholder="Condiciones especiales, descuentos adicionales, etc."
-              style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,resize:"none",outline:"none",boxSizing:"border-box"}}/>
-          </div>
-          {/* Subtotal */}
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,padding:"10px 12px",background:"#fff",borderRadius:4,border:"1px solid #e5e7eb"}}>
-            <span style={{fontSize:13,color:GRL}}>Subtotal antes de IVA:</span>
-            <span style={{fontSize:16,fontWeight:700,color:OR}}>{money2(subtotal)}</span>
-          </div>
-          {folioMsg&&<div style={{fontSize:11,marginBottom:10,padding:"8px 12px",borderRadius:4,
-            background:folioMsg.startsWith("✅")?"#f0fdf4":folioMsg.startsWith("❌")?"#fef2f2":"#fffbeb",
-            color:folioMsg.startsWith("✅")?"#16a34a":folioMsg.startsWith("❌")?"#dc2626":"#d97706",
-            border:`1px solid ${folioMsg.startsWith("✅")?"#bbf7d0":folioMsg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{folioMsg}</div>}
-          <button onClick={generarCotizacion} disabled={generating||cart.length===0}
-            style={{width:"100%",padding:"13px",background:cart.length===0?"#e5e7eb":OR,color:cart.length===0?GRL:"#fff",
-              border:"none",borderRadius:4,cursor:cart.length===0?"not-allowed":"pointer",
-              fontWeight:700,fontSize:14,letterSpacing:1,opacity:generating?0.7:1}}>
-            {generating?"GENERANDO...":"📄 GENERAR COTIZACIÓN PDF"}
-          </button>
-        </div>
+        )}
       </div>
     </div>
+  );
+}
+
+// ── Botón flotante del carrito — siempre visible ──────────────
+function CartFAB({cart, onClick, mob}){
+  const count = cart.length;
+  const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
+  const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:0}).format(n);
+
+  return (
+    <button
+      onClick={onClick}
+      title="Ver carrito de cotización"
+      style={{
+        position:"fixed",
+        bottom: mob ? 16 : 24,
+        right:  mob ? 16 : 24,
+        zIndex: 1500,
+        background: count > 0 ? OR : "#fff",
+        color: count > 0 ? "#fff" : GRL,
+        border: count > 0 ? "none" : "2px solid "+BD,
+        borderRadius: mob ? "50%" : "50px",
+        width:  count === 0 || mob ? (mob ? 52 : 52) : "auto",
+        height: count === 0 || mob ? (mob ? 52 : 52) : "auto",
+        padding: count > 0 && !mob ? "12px 20px" : 0,
+        cursor: "pointer",
+        fontWeight: 700,
+        fontSize: 13,
+        boxShadow: count > 0
+          ? "0 4px 20px rgba(255,107,6,0.45)"
+          : "0 2px 12px rgba(0,0,0,0.12)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        gap: 8,
+        transition: "all 0.2s ease",
+      }}
+    >
+      {/* Ícono carrito */}
+      <span style={{fontSize: mob ? 22 : (count > 0 ? 18 : 22), lineHeight:1}}>🛒</span>
+
+      {/* Texto solo en desktop cuando hay items */}
+      {count > 0 && !mob && (
+        <span style={{fontSize:13}}>
+          Cotización · {money2(subtotal)}
+        </span>
+      )}
+
+      {/* Burbuja contador — siempre que haya items */}
+      {count > 0 && (
+        <span style={{
+          background:"#fff",
+          color: OR,
+          borderRadius:"50%",
+          width: mob ? 20 : 22,
+          height: mob ? 20 : 22,
+          display:"flex",
+          alignItems:"center",
+          justifyContent:"center",
+          fontSize: mob ? 10 : 11,
+          fontWeight: 800,
+          position: mob ? "absolute" : "relative",
+          top: mob ? -6 : "auto",
+          right: mob ? -6 : "auto",
+          boxShadow: mob ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
+          border: mob ? "2px solid "+OR : "none",
+          flexShrink: 0,
+        }}>{count}</span>
+      )}
+    </button>
   );
 }
 
@@ -511,7 +589,7 @@ function PassCell({uid, db, hashPassword}){
   const [newPass,setNewPass] = useState("");
   const [saving, setSaving]  = useState(false);
   const [msg,    setMsg]     = useState("");
-  const [plain,  setPlain]   = useState(""); // contraseña en texto plano si se guardó en esta sesión
+  const [plain,  setPlain]   = useState("");
 
   async function guardar(){
     if(!newPass.trim()){ setMsg("❌ Escribe una contraseña"); return; }
@@ -581,7 +659,6 @@ function ChangePassword({session,db,hashPassword,checkPassword}){
       if(!ok){setMsg("❌ La contraseña actual es incorrecta.");setLoading(false);return;}
       const hash=await hashPassword(nueva);
       await setDoc(doc(db,"usuarios",adminDoc.id),{password:hash,actualizado:new Date().toISOString()},{merge:true});
-      // Actualizar sesión local
       const updated={...session,password:hash};
       localStorage.setItem("gt_session",JSON.stringify(updated));
       setMsg("✅ Contraseña cambiada exitosamente.");
@@ -629,7 +706,6 @@ function CreateAdmin({session,db,hashPassword}){
     if(form.password.length<4){setMsg("❌ Contraseña muy corta (mínimo 4 caracteres).");return;}
     setLoading(true);setMsg("");
     try {
-      // Verificar que no exista
       const snap=await getDocs(collection(db,"usuarios"));
       const existe=snap.docs.find(d=>d.data().usuario===form.usuario.trim());
       if(existe){setMsg("❌ Ya existe un usuario con ese nombre. Elige otro.");setLoading(false);return;}
@@ -689,7 +765,7 @@ function CreateAdmin({session,db,hashPassword}){
 // ════════════════════════════════════════════════════════════
 export default function App(){
   const [session,  setSession]  = useState(()=>{ try{const s=localStorage.getItem("gt_session");return s?JSON.parse(s):null;}catch(e){return null;} });
-  const [view,     setView]     = useState(()=>{ try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return u.rol==="admin"?"admin":"client";}}catch(e){}return "login"; });
+  const [view,     setView]     = useState(()=>{ try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return u.rol==="admin"||u.rol==="superadmin"?"admin":"client";}}catch(e){}return "login"; });
   const [tab,      setTab]      = useState("products");
   const [users,    setUsers]    = useState([]);
   const [products, setProducts] = useState([]);
@@ -712,43 +788,33 @@ export default function App(){
 
   useEffect(()=>{const h=()=>setMob(window.innerWidth<768);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);
 
-  // Debounce buscador
   useEffect(()=>{
     if(dbRef.current)clearTimeout(dbRef.current);
     dbRef.current=setTimeout(()=>{setDs(search);setPage(0);},300);
     return()=>{if(dbRef.current)clearTimeout(dbRef.current);};
   },[search]);
 
-  // Cargar productos al entrar
   useEffect(()=>{
     if(session) loadProducts();
-    if(session?.rol==="admin") loadUsers();
+    if(session?.rol==="admin"||session?.rol==="superadmin") loadUsers();
   },[session]);
 
-  // ── Cargar productos — NUNCA pisa estado si hay error ──────
   async function loadProducts(){
     setProdLoad(true);
     const data = await fbGetProductos();
-    if(data !== null) setProducts(data); // solo actualiza si no hubo error
+    if(data !== null) setProducts(data);
     else console.warn("No se pudieron cargar productos — manteniendo estado anterior");
     setProdLoad(false);
   }
 
-  // ── Cargar usuarios — NUNCA pisa estado si hay error ──────
   async function loadUsers(){
     setUserLoad(true);
     const data = await fbGetUsuarios();
-    if(data !== null){
-      // Mostrar todos los usuarios incluyendo otros admins
-      // Solo ocultar al admin actual para no confundir
-      setUsers(data);
-    } else {
-      console.warn("No se pudieron cargar usuarios — manteniendo estado anterior");
-    }
+    if(data !== null){ setUsers(data); }
+    else { console.warn("No se pudieron cargar usuarios — manteniendo estado anterior"); }
     setUserLoad(false);
   }
 
-  // ── Login ──────────────────────────────────────────────────
   async function doLogin(){
     setLerr(""); setLoginLoad(true);
     try {
@@ -774,7 +840,6 @@ export default function App(){
     localStorage.removeItem("gt_session");
   }
 
-  // ── Subir CSV ──────────────────────────────────────────────
   async function handleFile(e){
     const file=e.target.files[0]; if(!file)return; e.target.value="";
     if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
@@ -795,11 +860,10 @@ export default function App(){
           distribuidor:Number(r.DISTRIBUIDOR||0),
           asociado:    Number(r.ASOCIADO||0),
           actualizado: new Date().toISOString(),
-        })).filter(p=>p.codigo); // solo productos con código válido
+        })).filter(p=>p.codigo);
 
         if(mapped.length===0){setMsg("❌ No hay productos válidos en el archivo.");return;}
 
-        // 1. Respaldar versión anterior
         setMsg("💾 Respaldando versión anterior...");
         const oldSnap=await getDocs(collection(db,"productos"));
         if(oldSnap.docs.length>0){
@@ -809,7 +873,6 @@ export default function App(){
           await bkBatch.commit();
         }
 
-        // 2. Borrar productos anteriores
         setMsg("🗑️ Eliminando versión anterior...");
         if(oldSnap.docs.length>0){
           const delBatch=writeBatch(db);
@@ -817,7 +880,6 @@ export default function App(){
           await delBatch.commit();
         }
 
-        // 3. Insertar nuevos en lotes de 400
         const chunk=400;
         for(let i=0;i<mapped.length;i+=chunk){
           const batch=writeBatch(db);
@@ -828,14 +890,12 @@ export default function App(){
           setMsg(`⏳ ${Math.min(i+chunk,mapped.length)} / ${mapped.length} productos guardados...`);
         }
 
-        // 4. Verificar que se guardaron
         const verify=await getDocs(collection(db,"productos"));
         if(verify.size===0){
           setMsg("❌ ERROR CRÍTICO: Los productos no se guardaron correctamente. Revisa Firebase.");
           return;
         }
 
-        // 5. Bitácora
         await setDoc(doc(db,"bitacora",`carga_${Date.now()}`),{
           tipo:"carga_productos",
           por:session.nombre,
@@ -853,11 +913,9 @@ export default function App(){
     reader.readAsText(file,"UTF-8");
   }
 
-  // ── Guardar usuario ────────────────────────────────────────
   async function saveClient(form){
     setSaving(true);
     try {
-      // Validar campos
       if(!form.nombre?.trim()||!form.usuario?.trim()){
         alert("Nombre y usuario son obligatorios.");setSaving(false);return;
       }
@@ -865,7 +923,6 @@ export default function App(){
         alert("La contraseña es obligatoria para usuarios nuevos.");setSaving(false);return;
       }
 
-      // Verificar duplicado solo en creación
       if(!form.id){
         const existe=users.find(u=>u.usuario.trim()===form.usuario.trim());
         if(existe){alert("Ya existe un usuario con ese nombre. Elige otro.");setSaving(false);return;}
@@ -884,16 +941,13 @@ export default function App(){
       if(!form.id) data.creado_en=new Date().toISOString();
       if(form.password?.trim()) data.password=await hashPassword(form.password.trim());
 
-      // Guardar con merge:true para NO borrar campos existentes
       await setDoc(doc(db,"usuarios",id),data,{merge:true});
 
-      // Verificar que se guardó
       const verify=await getDoc(doc(db,"usuarios",id));
       if(!verify.exists()){
         alert("❌ ERROR: El usuario no se guardó. Intenta de nuevo.");setSaving(false);return;
       }
 
-      // Bitácora
       await setDoc(doc(db,"bitacora",`u_${Date.now()}`),{
         tipo:form.id?"edicion_usuario":"nuevo_usuario",
         usuario:form.usuario.trim(),
@@ -910,26 +964,21 @@ export default function App(){
     setSaving(false);
   }
 
-  // ── Toggle estatus ─────────────────────────────────────────
   async function toggleEstatus(id,est){
     try {
-      // Solo actualizar el campo estatus, no tocar nada más
       await setDoc(doc(db,"usuarios",id),{
         estatus: est==="activo"?"inactivo":"activo",
         actualizado: new Date().toISOString()
       },{merge:true});
-      // Actualizar estado local sin recargar todo
       setUsers(prev=>prev.map(u=>u.id===id?{...u,estatus:est==="activo"?"inactivo":"activo"}:u));
     } catch(err){
       alert("❌ Error al cambiar estatus: "+err.message);
     }
   }
 
-  // ── Eliminar usuario ───────────────────────────────────────
   async function deleteClient(id,nombre,rol){
-    // Proteger: no eliminar si es el último admin
-    if(rol==="admin"){
-      const admins=users.filter(u=>u.rol==="admin");
+    if(rol==="admin"||rol==="superadmin"){
+      const admins=users.filter(u=>u.rol==="admin"||u.rol==="superadmin");
       if(admins.length<=1){
         alert("❌ No puedes eliminar el único administrador del sistema.");
         return;
@@ -951,13 +1000,36 @@ export default function App(){
     }
   }
 
+  // ── Agregar al carrito ─────────────────────────────────────
+  function addToCart(p){
+    const rol2   = session?.rol||"client";
+    const lista2 = session?.lista||"PUBLICO";
+    const isVend2 = lista2==="VENDEDOR"||rol2==="admin"||rol2==="superadmin";
+    const precioVal = isVend2 ? (Number(p.publico)||0) : getPrecio(p,lista2);
+    const tipoPrecio = isVend2 ? "publico" : lista2.toLowerCase();
+
+    setCart(prev=>{
+      const idx=prev.findIndex(it=>it.codigo===String(p.codigo));
+      if(idx>=0){
+        return prev.map((it,i)=>i===idx?{...it,cantidad:it.cantidad+1}:it);
+      }
+      return [...prev,{
+        codigo:      String(p.codigo||""),
+        descripcion: String(p.descripcion||""),
+        precio:      precioVal,
+        tipoPrecio,
+        cantidad:    1,
+        _publico:     Number(p.publico)||0,
+        _distribuidor:Number(p.distribuidor)||0,
+        _asociado:    Number(p.asociado)||0,
+      }];
+    });
+  }
+
   // ── Filtrado ───────────────────────────────────────────────
-  // Filtrado usa ds (debounced) — buscador SIN cambios
-  // Solo se agrega ordenamiento por stock al final
   const filtered=useMemo(()=>{
     const q=ds.trim();
     const results = q ? products.filter(p=>smartMatch(q,p)) : [...products];
-    // Ordenar por stock total: mayor a menor, 0 al final
     return results.sort((a,b)=>{
       const ta=calcTotal(a), tb=calcTotal(b);
       if(ta===0 && tb===0) return 0;
@@ -1014,7 +1086,7 @@ export default function App(){
   const Hdr=session&&<div style={{background:OR,borderBottom:"2px solid #e05500",padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}}>
     <div style={{display:"flex",alignItems:"center",gap:12}}>
       <Logo h={mob?32:44}/>
-      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{session.rol==="admin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
+      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{session.rol==="admin"||session.rol==="superadmin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10}}>
       {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#fff",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{session.empresa}</div>}</div>}
@@ -1043,6 +1115,10 @@ export default function App(){
   // ════ ADMIN ════════════════════════════════════════════════
   if(view==="admin") return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
     {Hdr}{modal&&<ClientModal/>}
+    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
+    {/* FAB carrito — siempre visible en admin */}
+    {!cartOpen&&<CartFAB cart={cart} onClick={()=>setCartOpen(true)} mob={mob}/>}
+
     <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
       {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],
         ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
@@ -1083,6 +1159,7 @@ export default function App(){
               <th style={{padding:"8px 6px",textAlign:"right",color:"#16a34a",fontWeight:700}}>PÚB</th>
               <th style={{padding:"8px 6px",textAlign:"right",color:"#2563eb",fontWeight:700}}>DIST</th>
               <th style={{padding:"8px 6px",textAlign:"right",color:"#ea580c",fontWeight:700}}>ASOC</th>
+              <th style={{padding:"8px 6px",width:34}}></th>
             </tr></thead>
             <tbody>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
               const tot=calcTotal(p),disp=tot>0;
@@ -1095,6 +1172,10 @@ export default function App(){
                 <td style={{padding:"6px 6px",textAlign:"right",color:"#16a34a"}}>{money(p.publico)}</td>
                 <td style={{padding:"6px 6px",textAlign:"right",color:"#2563eb"}}>{money(p.distribuidor)}</td>
                 <td style={{padding:"6px 6px",textAlign:"right",color:"#ea580c"}}>{money(p.asociado)}</td>
+                <td style={{padding:"6px 6px"}}>
+                  <button onClick={()=>addToCart(p)} title="Agregar a cotización"
+                    style={{background:OR,color:"#fff",border:"none",borderRadius:4,width:26,height:26,cursor:"pointer",fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>＋</button>
+                </td>
               </tr>;
             })}</tbody>
           </table>
@@ -1114,21 +1195,21 @@ export default function App(){
           </div>
         </div>
         {mob?(
-          <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"||u.rol==="superadmin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"||u.rol==="superadmin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
               <div>
-                <div style={{fontWeight:700,fontSize:13}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</div>
+                <div style={{fontWeight:700,fontSize:13}}>{u.nombre}{(u.rol==="admin"||u.rol==="superadmin")&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>{u.rol==="superadmin"?"SUPERADMIN":"ADMIN"}</span>}</div>
                 {u.empresa&&<div style={{color:GRL,fontSize:11}}>{u.empresa}</div>}
               </div>
               <Badge val={u.estatus}/>
             </div>
             <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-              <Badge val={u.rol==="admin"?"admin":u.lista}/>
+              <Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.lista}/>
               <span style={{color:GRL,fontSize:11,fontFamily:"monospace"}}>@{u.usuario}</span>
             </div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
-              {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
+              {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
+              {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
               {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
             </div>
           </div>)}</div>
@@ -1136,18 +1217,17 @@ export default function App(){
           <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","CONTRASEÑA","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
-              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:u.rol==="admin"?"#eff6ff":i%2===0?CD:"#fafafa"}}>
-                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
+              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:(u.rol==="admin"||u.rol==="superadmin")?"#eff6ff":i%2===0?CD:"#fafafa"}}>
+                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{(u.rol==="admin"||u.rol==="superadmin")&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>{u.rol==="superadmin"?"SUPERADMIN":"ADMIN"}</span>}</td>
                 <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                 <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
                 <td style={{padding:"9px 14px"}}>
-                  {/* Solo superadmin ve contraseñas de admins, admin normal solo ve de clientes */}
-                  {(canDo(session,"config") || u.rol!=="admin") 
+                  {(canDo(session,"config") || (u.rol!=="admin"&&u.rol!=="superadmin"))
                     ? <PassCell uid={u.id} db={db} hashPassword={hashPassword}/>
                     : <span style={{color:"#bbb",fontSize:11}}>—</span>}
                 </td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.rol}/></td>
-                <td style={{padding:"9px 14px"}}>{u.rol==="admin"||u.rol==="superadmin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
+                <td style={{padding:"9px 14px"}}>{(u.rol==="admin"||u.rol==="superadmin")?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                 <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
                   {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
@@ -1162,17 +1242,14 @@ export default function App(){
       </div>}
 
       {tab==="settings"&&<div style={{maxWidth:520}}>
-        {/* Cambiar contraseña */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>🔑 CAMBIAR MI CONTRASEÑA</div>
           <ChangePassword session={session} db={db} hashPassword={hashPassword} checkPassword={checkPassword}/>
         </div>
-        {/* Crear admin */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>👤 CREAR USUARIO ADMINISTRADOR</div>
           <CreateAdmin session={session} db={db} hashPassword={hashPassword}/>
         </div>
-        {/* Info sistema */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:12}}>ℹ️ INFORMACIÓN DEL SISTEMA</div>
           <div style={{color:GRL,fontSize:12,lineHeight:2}}>
@@ -1194,17 +1271,9 @@ export default function App(){
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
   const lista=session?.lista, isVend=lista==="VENDEDOR"||session?.rol==="admin"||session?.rol==="superadmin";
   return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
-    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)}/>}
-    {/* Botón flotante carrito */}
-    {cart.length>0&&!cartOpen&&(
-      <button onClick={()=>setCartOpen(true)} style={{position:"fixed",bottom:24,right:24,zIndex:1000,
-        background:OR,color:"#fff",border:"none",borderRadius:"50px",padding:"12px 20px",
-        cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 4px 16px rgba(255,107,6,0.5)",
-        display:"flex",alignItems:"center",gap:8}}>
-        🧾 <span>Cotización</span>
-        <span style={{background:"#fff",color:OR,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800}}>{cart.length}</span>
-      </button>
-    )}
+    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
+    {/* FAB carrito — siempre visible en cliente */}
+    {!cartOpen&&<CartFAB cart={cart} onClick={()=>setCartOpen(true)} mob={mob}/>}
     {Hdr}
     <div style={{background:"linear-gradient(90deg,#e05500,#c44a00)",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
       <span style={{color:"#fff",fontSize:14}}>★</span>
@@ -1242,7 +1311,6 @@ export default function App(){
             return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
               <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{p.codigo}</div>
               <div style={{fontSize:12,fontWeight:600,marginBottom:8,lineHeight:1.4}}>{p.descripcion}</div>
-              {/* Precios */}
               {isVend?<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
                 <div style={{background:"#f0fdf4",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>PÚBLICO</div><div style={{color:"#16a34a",fontWeight:700,fontSize:12}}>{money(p.publico)}</div></div>
                 <div style={{background:"#eff6ff",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>DISTRIBUIDOR</div><div style={{color:"#2563eb",fontWeight:700,fontSize:12}}>{money(p.distribuidor)}</div></div>
@@ -1251,12 +1319,10 @@ export default function App(){
                 <span style={{color:GRL,fontSize:10}}>Almacén ppal: <strong>{almPpal(p)}</strong></span>
                 <span style={{color:OR,fontWeight:700,fontSize:14}}>{money(getPrecio(p,lista))}</span>
               </div>}
-              {/* Stock total y disponibilidad */}
               <div style={{display:"flex",gap:8,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Total: {stockVis(tot)}</span>
                 <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
               </div>
-              {/* Desglose por almacén */}
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
                 {ALMS.map((a,idx)=>{
                   const v=Number(p[a])||0;
