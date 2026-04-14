@@ -6,6 +6,8 @@ import {
   getFirestore, collection, getDocs, doc, setDoc,
   deleteDoc, writeBatch, getDoc
 } from "firebase/firestore";
+import jsPDF from "jspdf";
+import "jspdf-autotable";
 
 // ── Firebase config ───────────────────────────────────────────
 const firebaseConfig = {
@@ -223,6 +225,285 @@ function Pager({total,pg,setPg,ps=50}){
   </div>;
 }
 
+// ── Generador de PDF de cotización ───────────────────────────
+async function generarPDF({folio, session, items, nota, vigencia}){
+  const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
+  const W = 210, M = 15;
+
+  // Fondo header naranja
+  doc2.setFillColor(255,107,6);
+  doc2.rect(0, 0, W, 38, "F");
+
+  // Logo texto (si no hay imagen embebida usamos texto estilizado)
+  doc2.setTextColor(255,255,255);
+  doc2.setFontSize(22);
+  doc2.setFont("helvetica","bold");
+  doc2.text("GRUPO TAPATÍA", M, 16);
+  doc2.setFontSize(9);
+  doc2.setFont("helvetica","normal");
+  doc2.text("Llantas Agrícolas, Industriales y para Motocicleta", M, 22);
+  doc2.text("Guadalajara, Jalisco, México  |  ventas@grupotapatia.com", M, 27);
+  doc2.text("www.tapatia.app", M, 32);
+
+  // Etiqueta COTIZACIÓN
+  doc2.setFillColor(230,90,0);
+  doc2.rect(140, 6, 55, 26, "F");
+  doc2.setTextColor(255,255,255);
+  doc2.setFontSize(14);
+  doc2.setFont("helvetica","bold");
+  doc2.text("COTIZACIÓN", 167.5, 17, {align:"center"});
+  doc2.setFontSize(11);
+  doc2.text(folio, 167.5, 26, {align:"center"});
+
+  // Datos cotización
+  const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
+  const vig   = vigencia || "15 días naturales";
+  doc2.setTextColor(60,60,60);
+  doc2.setFontSize(9);
+  doc2.setFont("helvetica","normal");
+  let y = 46;
+  doc2.setFillColor(245,245,245);
+  doc2.rect(M, y-5, W-M*2, 22, "F");
+  doc2.setFont("helvetica","bold");
+  doc2.text("DATOS DE COTIZACIÓN", M+2, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Folio:`, M+2, y);         doc2.setFont("helvetica","bold"); doc2.text(folio, M+22, y);
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Fecha:`, 90, y);          doc2.setFont("helvetica","bold"); doc2.text(fecha, 108, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Elaboró:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.nombre, M+22, y);
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Vigencia:`, 90, y);       doc2.setFont("helvetica","bold"); doc2.text(vig, 108, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Cliente:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.empresa||session.nombre, M+22, y);
+
+  // Tabla de productos
+  y += 10;
+  const rows = items.map((it,i) => [
+    i+1,
+    it.codigo,
+    it.descripcion,
+    it.cantidad,
+    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio),
+    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio * it.cantidad),
+  ]);
+  doc2.autoTable({
+    startY: y,
+    head: [["#","CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"]],
+    body: rows,
+    margin: {left:M, right:M},
+    headStyles: {fillColor:[255,107,6], textColor:255, fontStyle:"bold", fontSize:8, halign:"center"},
+    bodyStyles: {fontSize:8, textColor:[40,40,40]},
+    columnStyles: {
+      0:{halign:"center", cellWidth:8},
+      1:{cellWidth:30},
+      2:{cellWidth:80},
+      3:{halign:"center", cellWidth:14},
+      4:{halign:"right", cellWidth:25},
+      5:{halign:"right", cellWidth:25},
+    },
+    alternateRowStyles:{fillColor:[250,250,250]},
+    tableLineColor:[220,220,220],
+    tableLineWidth:0.1,
+  });
+
+  // Totales
+  const subtotal = items.reduce((s,it)=>s+it.precio*it.cantidad,0);
+  const finalY   = doc2.lastAutoTable.finalY + 6;
+  doc2.setFillColor(245,245,245);
+  doc2.rect(120, finalY-4, 75, 20, "F");
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(9); doc2.setTextColor(80,80,80);
+  doc2.text("Subtotal:", 122, finalY+2);
+  doc2.text("IVA:", 122, finalY+8);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(10); doc2.setTextColor(40,40,40);
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+2, {align:"right"});
+  doc2.setFontSize(8); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
+  doc2.text("(Según tipo de producto — consultar factura)", 193, finalY+8, {align:"right"});
+  // Línea separadora
+  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.5);
+  doc2.line(120, finalY+10, 195, finalY+10);
+  doc2.setFillColor(255,107,6);
+  doc2.rect(120, finalY+11, 75, 9, "F");
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(11);
+  doc2.text("TOTAL:", 122, finalY+17.5);
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+17.5, {align:"right"});
+
+  // Notas
+  if(nota){
+    const ny = finalY+28;
+    doc2.setTextColor(60,60,60); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
+    doc2.text("OBSERVACIONES:", M, ny);
+    doc2.setFont("helvetica","normal");
+    const lines = doc2.splitTextToSize(nota, W-M*2-5);
+    doc2.text(lines, M, ny+5);
+  }
+
+  // Footer
+  const py = 282;
+  doc2.setFillColor(255,107,6);
+  doc2.rect(0, py, W, 15, "F");
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5);
+  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.", W/2, py+5, {align:"center"});
+  doc2.text("Los precios están sujetos a cambios sin previo aviso. Precios antes de IVA salvo productos agrícolas.", W/2, py+9, {align:"center"});
+  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`, W/2, py+13, {align:"center"});
+
+  doc2.save(`Cotizacion_${folio}.pdf`);
+}
+
+// ── Carrito de cotización ─────────────────────────────────────
+function CartPanel({cart, setCart, session, db, onClose}){
+  const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
+  const [nota, setNota] = useState("");
+  const [vigencia, setVigencia] = useState("15 días naturales");
+  const [generating, setGenerating] = useState(false);
+  const [folioMsg, setFolioMsg] = useState("");
+
+  const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad, 0);
+  const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
+
+  function updCantidad(idx, val){
+    const n = Math.max(1, parseInt(val)||1);
+    setCart(prev=>prev.map((it,i)=>i===idx?{...it,cantidad:n}:it));
+  }
+  function updPrecio(idx, tipo){
+    setCart(prev=>prev.map((it,i)=>{
+      if(i!==idx) return it;
+      const p = tipo==="publico"?it._publico:tipo==="distribuidor"?it._distribuidor:it._asociado;
+      return {...it, precio:p, tipoPrecio:tipo};
+    }));
+  }
+  function remove(idx){ setCart(prev=>prev.filter((_,i)=>i!==idx)); }
+
+  async function getNextFolio(){
+    const uid = session.id||session.usuario;
+    const ref  = doc(db,"folios",uid);
+    const snap = await getDoc(ref);
+    const current = snap.exists() ? (snap.data().ultimo||0) : 0;
+    const next = current + 1;
+    await setDoc(ref,{ultimo:next, usuario:session.usuario, actualizado:new Date().toISOString()},{merge:true});
+    const prefix = session.usuario.substring(0,3).toUpperCase();
+    return `COT-${prefix}-${String(next).padStart(4,"0")}`;
+  }
+
+  async function generarCotizacion(){
+    if(cart.length===0){setFolioMsg("❌ Agrega al menos un producto.");return;}
+    setGenerating(true); setFolioMsg("Generando folio...");
+    try {
+      const folio = await getNextFolio();
+      setFolioMsg(`📄 Folio: ${folio} — generando PDF...`);
+      await generarPDF({folio, session, items:cart, nota, vigencia});
+      // Guardar cotización en Firebase
+      await setDoc(doc(db,"cotizaciones",folio),{
+        folio, usuario:session.usuario, nombre:session.nombre,
+        empresa:session.empresa||"", items:cart,
+        subtotal, nota, vigencia,
+        fecha:new Date().toISOString(),
+      });
+      setFolioMsg(`✅ ${folio} generada y guardada.`);
+      setTimeout(()=>{ setCart([]); onClose(); },2000);
+    } catch(e){ setFolioMsg("❌ Error: "+e.message); }
+    setGenerating(false);
+  }
+
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",justifyContent:"flex-end",fontFamily:"Arial,sans-serif"}}>
+      <div style={{width:"100%",maxWidth:520,background:"#fff",height:"100%",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)"}}>
+        {/* Header */}
+        <div style={{background:OR,padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div>
+            <div style={{color:"#fff",fontWeight:700,fontSize:15,letterSpacing:1}}>🧾 COTIZACIÓN</div>
+            <div style={{color:"rgba(255,255,255,0.8)",fontSize:11}}>{cart.length} producto{cart.length!==1?"s":""} · {money2(subtotal)}</div>
+          </div>
+          <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",width:32,height:32,borderRadius:"50%",cursor:"pointer",fontSize:16,fontWeight:700}}>✕</button>
+        </div>
+
+        {/* Productos */}
+        <div style={{flex:1,overflowY:"auto",padding:16}}>
+          {cart.length===0&&<div style={{textAlign:"center",color:GRL,padding:40,fontSize:13}}>
+            Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo
+          </div>}
+          {cart.map((it,i)=>(
+            <div key={i} style={{border:"1px solid #e5e7eb",borderRadius:6,padding:12,marginBottom:10,background:"#fafafa"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                <div style={{flex:1,marginRight:8}}>
+                  <div style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</div>
+                  <div style={{fontSize:12,fontWeight:600,lineHeight:1.3,color:"#1a1a1a"}}>{it.descripcion}</div>
+                </div>
+                <button onClick={()=>remove(i)} style={{background:"#fee2e2",border:"none",color:"#dc2626",width:24,height:24,borderRadius:"50%",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>✕</button>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                {/* Cantidad */}
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:11,color:GRL}}>Cant:</span>
+                  <div style={{display:"flex",alignItems:"center",border:"1px solid #e5e7eb",borderRadius:4,overflow:"hidden"}}>
+                    <button onClick={()=>updCantidad(i,it.cantidad-1)} style={{background:"#f3f4f6",border:"none",padding:"4px 8px",cursor:"pointer",fontSize:14,fontWeight:700,color:"#374151"}}>−</button>
+                    <input type="number" min="1" value={it.cantidad} onChange={e=>updCantidad(i,e.target.value)}
+                      style={{width:40,textAlign:"center",border:"none",padding:"4px",fontSize:13,fontWeight:700,outline:"none"}}/>
+                    <button onClick={()=>updCantidad(i,it.cantidad+1)} style={{background:"#f3f4f6",border:"none",padding:"4px 8px",cursor:"pointer",fontSize:14,fontWeight:700,color:"#374151"}}>＋</button>
+                  </div>
+                </div>
+                {/* Selector precio para vendedor/admin */}
+                {isVend&&(
+                  <select value={it.tipoPrecio} onChange={e=>updPrecio(i,e.target.value)}
+                    style={{padding:"4px 8px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:11,color:"#374151",outline:"none",background:"#fff"}}>
+                    <option value="publico">Público</option>
+                    <option value="distribuidor">Distribuidor</option>
+                    <option value="asociado">Asociado</option>
+                  </select>
+                )}
+                {/* Precio e importe */}
+                <div style={{marginLeft:"auto",textAlign:"right"}}>
+                  <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#1a1a1a"}}>{money2(it.precio)}</strong></div>
+                  <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(it.precio*it.cantidad)}</div>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* Footer con totales y opciones */}
+        <div style={{borderTop:"1px solid #e5e7eb",padding:16,background:"#f9f9f9"}}>
+          {/* Vigencia */}
+          <div style={{marginBottom:10}}>
+            <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
+            <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,outline:"none",background:"#fff"}}>
+              <option>15 días naturales</option>
+              <option>30 días naturales</option>
+              <option>Sujeto a disponibilidad</option>
+            </select>
+          </div>
+          {/* Notas */}
+          <div style={{marginBottom:12}}>
+            <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>OBSERVACIONES</div>
+            <textarea value={nota} onChange={e=>setNota(e.target.value)} rows={2}
+              placeholder="Condiciones especiales, descuentos adicionales, etc."
+              style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,resize:"none",outline:"none",boxSizing:"border-box"}}/>
+          </div>
+          {/* Subtotal */}
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12,padding:"10px 12px",background:"#fff",borderRadius:4,border:"1px solid #e5e7eb"}}>
+            <span style={{fontSize:13,color:GRL}}>Subtotal antes de IVA:</span>
+            <span style={{fontSize:16,fontWeight:700,color:OR}}>{money2(subtotal)}</span>
+          </div>
+          {folioMsg&&<div style={{fontSize:11,marginBottom:10,padding:"8px 12px",borderRadius:4,
+            background:folioMsg.startsWith("✅")?"#f0fdf4":folioMsg.startsWith("❌")?"#fef2f2":"#fffbeb",
+            color:folioMsg.startsWith("✅")?"#16a34a":folioMsg.startsWith("❌")?"#dc2626":"#d97706",
+            border:`1px solid ${folioMsg.startsWith("✅")?"#bbf7d0":folioMsg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{folioMsg}</div>}
+          <button onClick={generarCotizacion} disabled={generating||cart.length===0}
+            style={{width:"100%",padding:"13px",background:cart.length===0?"#e5e7eb":OR,color:cart.length===0?GRL:"#fff",
+              border:"none",borderRadius:4,cursor:cart.length===0?"not-allowed":"pointer",
+              fontWeight:700,fontSize:14,letterSpacing:1,opacity:generating?0.7:1}}>
+            {generating?"GENERANDO...":"📄 GENERAR COTIZACIÓN PDF"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Celda de contraseña con ver/editar ───────────────────────
 function PassCell({uid, db, hashPassword}){
   const [show,   setShow]   = useState(false);
@@ -417,6 +698,8 @@ export default function App(){
   const [search,   setSearch]   = useState("");
   const [ds,       setDs]       = useState("");
   const [page,     setPage]     = useState(0);
+  const [cart,     setCart]     = useState([]);
+  const [cartOpen, setCartOpen] = useState(false);
   const PS = 50;
   const [lu,setLu]=useState(""); const [lp,setLp]=useState(""); const [lerr,setLerr]=useState("");
   const [loginLoad,setLoginLoad]=useState(false);
@@ -909,8 +1192,19 @@ export default function App(){
   </div>;
 
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
-  const lista=session?.lista, isVend=lista==="VENDEDOR";
+  const lista=session?.lista, isVend=lista==="VENDEDOR"||session?.rol==="admin"||session?.rol==="superadmin";
   return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
+    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)}/>}
+    {/* Botón flotante carrito */}
+    {cart.length>0&&!cartOpen&&(
+      <button onClick={()=>setCartOpen(true)} style={{position:"fixed",bottom:24,right:24,zIndex:1000,
+        background:OR,color:"#fff",border:"none",borderRadius:"50px",padding:"12px 20px",
+        cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 4px 16px rgba(255,107,6,0.5)",
+        display:"flex",alignItems:"center",gap:8}}>
+        🧾 <span>Cotización</span>
+        <span style={{background:"#fff",color:OR,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800}}>{cart.length}</span>
+      </button>
+    )}
     {Hdr}
     <div style={{background:"linear-gradient(90deg,#e05500,#c44a00)",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
       <span style={{color:"#fff",fontSize:14}}>★</span>
@@ -963,7 +1257,7 @@ export default function App(){
                 <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
               </div>
               {/* Desglose por almacén */}
-              <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
                 {ALMS.map((a,idx)=>{
                   const v=Number(p[a])||0;
                   return <div key={a} style={{background:v>0?"#f0fdf4":"#f9f9f9",border:"1px solid "+(v>0?"#bbf7d0":BD),borderRadius:3,padding:"2px 7px",textAlign:"center"}}>
@@ -972,6 +1266,10 @@ export default function App(){
                   </div>;
                 })}
               </div>
+              <button onClick={()=>addToCart(p)}
+                style={{width:"100%",padding:"8px",background:OR,color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:12,letterSpacing:1}}>
+                ＋ AGREGAR A COTIZACIÓN
+              </button>
             </div>;
           })}</div>
         ):(
@@ -989,6 +1287,7 @@ export default function App(){
                 <th style={{padding:"9px 8px",textAlign:"center",color:GRL,fontSize:10}}>PPAL</th>
                 {ALMS_L.map(a=><th key={a} style={{padding:"9px 6px",textAlign:"right",color:GRL,fontSize:10,whiteSpace:"nowrap"}}>{a}</th>)}
                 <th style={{padding:"9px 8px",textAlign:"center",color:GRL,fontSize:10}}>DISP.</th>
+                <th style={{padding:"9px 6px",width:34}}></th>
               </tr></thead>
               <tbody>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
                 const tot=calcTotal(p),disp=tot>0;
@@ -1007,6 +1306,10 @@ export default function App(){
                     return <td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v>=30?"+30":v}</td>;
                   })}
                   <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
+                  <td style={{padding:"6px 8px"}}>
+                    <button onClick={()=>addToCart(p)} title="Agregar a cotización"
+                      style={{background:OR,color:"#fff",border:"none",borderRadius:4,width:26,height:26,cursor:"pointer",fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>＋</button>
+                  </td>
                 </tr>;
               })}</tbody>
             </table>
