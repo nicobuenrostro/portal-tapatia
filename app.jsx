@@ -483,7 +483,7 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
 function CartPanel({cart, setCart, session, db, onClose, mob}){
   const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
   const [nota, setNota] = useState("");
-  const [vigencia, setVigencia] = useState("15 días naturales");
+  const [vigencia, setVigencia] = useState("7 días naturales");
   const [generating, setGenerating] = useState(false);
   const [folioMsg, setFolioMsg] = useState("");
 
@@ -647,6 +647,7 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                 <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
                 <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
                   style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",background:"#fff"}}>
+                  <option>7 días naturales</option>
                   <option>15 días naturales</option>
                   <option>30 días naturales</option>
                   <option>Sujeto a disponibilidad</option>
@@ -1536,7 +1537,7 @@ export default function App(){
                     style={{flex:1,padding:"7px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600}}>
                     {quoteDetail?.folio===q.folio?"▲ Ocultar":"▼ Ver detalle"}
                   </button>
-                  <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
+                  <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"7 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
                     style={{flex:2,padding:"7px",background:OR,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:700}}>
                     📄 Regenerar PDF
                   </button>
