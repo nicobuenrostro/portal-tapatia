@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import {
   initializeApp
 } from "firebase/app";
@@ -910,6 +910,9 @@ export default function App(){
   const [page,     setPage]     = useState(0);
   const [cart,     setCart]     = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
+  const [quotes,   setQuotes]   = useState([]);
+  const [quotesLoad,setQuotesLoad]=useState(false);
+  const [quoteDetail,setQuoteDetail]=useState(null);
   const PS = 50;
   const [lu,setLu]=useState(""); const [lp,setLp]=useState(""); const [lerr,setLerr]=useState("");
   const [loginLoad,setLoginLoad]=useState(false);
@@ -947,6 +950,20 @@ export default function App(){
     if(data !== null){ setUsers(data); }
     else { console.warn("No se pudieron cargar usuarios — manteniendo estado anterior"); }
     setUserLoad(false);
+  }
+
+  // ── Cargar cotizaciones ────────────────────────────────────
+  async function loadQuotes(){
+    setQuotesLoad(true);
+    try {
+      const snap = await getDocs(collection(db,"cotizaciones"));
+      const isAdmin = session?.rol==="admin"||session?.rol==="superadmin";
+      let qdata = snap.docs.map(d=>({id:d.id,...d.data()}));
+      if(!isAdmin) qdata = qdata.filter(q=>q.usuario===session?.usuario);
+      qdata.sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
+      setQuotes(qdata);
+    } catch(e){ console.error("Error cotizaciones:",e); }
+    setQuotesLoad(false);
   }
 
   async function doLogin(){
@@ -1255,9 +1272,10 @@ export default function App(){
 
     <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
       {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],
+        ["quotes","📋 COTIZACIONES"],
         ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
         .map(([k,l])=>(
-        <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
+        <button key={k} onClick={()=>{setTab(k);if(k==="quotes")loadQuotes();}} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
           color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",
           cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
       ))}
@@ -1399,16 +1417,148 @@ export default function App(){
           </div>
         </div>
       </div>}
+
+      {tab==="quotes"&&<div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+          <div>
+            <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>Historial de Cotizaciones</span>
+            {(session?.rol==="admin"||session?.rol==="superadmin")&&
+              <span style={{color:GRL,fontSize:11,marginLeft:10}}>— todas los usuarios</span>}
+          </div>
+          <button onClick={loadQuotes} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"8px 14px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ RECARGAR</button>
+        </div>
+        {quotesLoad&&<div style={{textAlign:"center",padding:30,color:GRL}}>Cargando cotizaciones...</div>}
+        {!quotesLoad&&quotes.length===0&&(
+          <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
+            <div style={{fontSize:36,marginBottom:10}}>📋</div>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Sin cotizaciones aún</div>
+            <div style={{fontSize:12}}>Las cotizaciones generadas aparecerán aquí</div>
+          </div>
+        )}
+        {!quotesLoad&&quotes.length>0&&(
+          mob?(
+            <div>{quotes.map((q,i)=>(
+              <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:8,padding:14,marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:13,color:OR}}>{q.folio}</div>
+                    <div style={{color:GRL,fontSize:11,marginTop:2}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}</div>
+                  </div>
+                  <span style={{fontWeight:700,fontSize:13,color:"#1a1a1a"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</span>
+                </div>
+                <div style={{fontSize:12,color:GRL,marginBottom:4}}>Cliente: <strong style={{color:"#1a1a1a"}}>{q.cliente||q.empresa||q.nombre||"—"}</strong></div>
+                {(session?.rol==="admin"||session?.rol==="superadmin")&&
+                  <div style={{fontSize:11,color:GRL,marginBottom:8}}>Elaboró: {q.nombre} · @{q.usuario}</div>}
+                <div style={{fontSize:11,color:GRL,marginBottom:10}}>{(q.items||[]).length} producto{(q.items||[]).length!==1?"s":""} · Vigencia: {q.vigencia||"—"}</div>
+                <div style={{display:"flex",gap:6}}>
+                  <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
+                    style={{flex:1,padding:"7px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600}}>
+                    {quoteDetail?.folio===q.folio?"▲ Ocultar":"▼ Ver detalle"}
+                  </button>
+                  <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
+                    style={{flex:2,padding:"7px",background:OR,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:700}}>
+                    📄 Regenerar PDF
+                  </button>
+                </div>
+                {quoteDetail?.folio===q.folio&&(
+                  <div style={{marginTop:10,borderTop:"1px solid "+BD,paddingTop:10}}>
+                    <div style={{fontSize:10,color:GRL,fontWeight:700,marginBottom:6}}>PRODUCTOS</div>
+                    {(q.items||[]).map((it,j)=>(
+                      <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderBottom:"1px solid #f3f4f6"}}>
+                        <div style={{flex:1}}><span style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</span><br/>{it.descripcion}</div>
+                        <div style={{textAlign:"right",marginLeft:8,whiteSpace:"nowrap"}}>
+                          <div>{it.cantidad} pz</div>
+                          <div style={{fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</div>
+                        </div>
+                      </div>
+                    ))}
+                    {q.nota&&<div style={{marginTop:6,fontSize:11,color:GRL}}>Obs: {q.nota}</div>}
+                  </div>
+                )}
+              </div>
+            ))}</div>
+          ):(
+            <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+                <thead><tr style={{background:"#f0f0f0"}}>
+                  {["FOLIO","FECHA","CLIENTE",...((session?.rol==="admin"||session?.rol==="superadmin")?["ELABORÓ"]:[]),"PRODUCTOS","SUBTOTAL","VIGENCIA","ACCIONES"]
+                    .map(h=><th key={h} style={{padding:"9px 12px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1,whiteSpace:"nowrap"}}>{h}</th>)}
+                </tr></thead>
+                <tbody>{quotes.map((q,i)=>(
+                  <React.Fragment key={i}>
+                    <tr style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
+                      <td style={{padding:"9px 12px",fontWeight:700,color:OR,whiteSpace:"nowrap"}}>{q.folio}</td>
+                      <td style={{padding:"9px 12px",color:GRL,whiteSpace:"nowrap"}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}</td>
+                      <td style={{padding:"9px 12px",fontWeight:600}}>{q.cliente||q.empresa||q.nombre||"—"}</td>
+                      {(session?.rol==="admin"||session?.rol==="superadmin")&&
+                        <td style={{padding:"9px 12px",color:GRL,fontSize:11}}>{q.nombre}<br/><span style={{fontFamily:"monospace",fontSize:10}}>@{q.usuario}</span></td>}
+                      <td style={{padding:"9px 12px",textAlign:"center",color:GRL}}>{(q.items||[]).length}</td>
+                      <td style={{padding:"9px 12px",fontWeight:700,color:"#1a1a1a",whiteSpace:"nowrap"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</td>
+                      <td style={{padding:"9px 12px",color:GRL,fontSize:11,whiteSpace:"nowrap"}}>{q.vigencia||"—"}</td>
+                      <td style={{padding:"9px 12px"}}>
+                        <div style={{display:"flex",gap:6}}>
+                          <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
+                            style={{padding:"5px 10px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:4,cursor:"pointer",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>
+                            {quoteDetail?.folio===q.folio?"▲ Ocultar":"▼ Detalle"}
+                          </button>
+                          <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
+                            style={{padding:"5px 10px",background:OR,color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>
+                            📄 PDF
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                    {quoteDetail?.folio===q.folio&&(
+                      <tr style={{background:"#fffbf5"}}>
+                        <td colSpan={9} style={{padding:"12px 16px",borderTop:"1px solid #fde68a"}}>
+                          <div style={{fontSize:11,fontWeight:700,color:OR,marginBottom:8}}>DETALLE DE PRODUCTOS</div>
+                          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
+                            <thead><tr style={{background:"#fff7ed"}}>
+                              {["CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"].map(h=>(
+                                <th key={h} style={{padding:"5px 8px",textAlign:"left",color:GRL,fontWeight:700,fontSize:10}}>{h}</th>
+                              ))}
+                            </tr></thead>
+                            <tbody>{(q.items||[]).map((it,j)=>(
+                              <tr key={j} style={{borderTop:"1px solid #fde68a"}}>
+                                <td style={{padding:"5px 8px",fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</td>
+                                <td style={{padding:"5px 8px"}}>{it.descripcion}</td>
+                                <td style={{padding:"5px 8px",textAlign:"center"}}>{it.cantidad}</td>
+                                <td style={{padding:"5px 8px",textAlign:"right"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio||0)}</td>
+                                <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</td>
+                              </tr>
+                            ))}</tbody>
+                          </table>
+                          {q.nota&&<div style={{marginTop:8,fontSize:11,color:GRL}}>📝 <strong>Observaciones:</strong> {q.nota}</div>}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}</tbody>
+              </table>
+            </div>
+          )
+        )}
+      </div>}
     </div>
   </div>;
 
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
   const lista=session?.lista, isVend=lista==="VENDEDOR"||session?.rol==="admin"||session?.rol==="superadmin";
+  const [clienteTab, setClienteTab] = useState("catalog");
   return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
     {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
     {/* FAB carrito — siempre visible en cliente */}
     {!cartOpen&&<CartFAB cart={cart} onClick={()=>setCartOpen(true)} mob={mob}/>}
     {Hdr}
+    {/* Tabs cliente */}
+    <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 20px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+      {[["catalog","🏷️ CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"]].map(([k,l])=>(
+        <button key={k} onClick={()=>{setClienteTab(k);if(k==="quotes")loadQuotes();}}
+          style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
+            color:clienteTab===k?OR:GRL,borderBottom:clienteTab===k?"2px solid "+OR:"2px solid transparent",
+            cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
+      ))}
+    </div>
     <div style={{background:"linear-gradient(90deg,#e05500,#c44a00)",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
       <span style={{color:"#fff",fontSize:14}}>★</span>
       <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:700}}>CONTADO ANTICIPADO: <span style={{color:"#ffe0c0"}}>3% DESCUENTO ADICIONAL</span></span>
@@ -1436,6 +1586,7 @@ export default function App(){
         <span style={{color:"#9333ea",fontWeight:700}}>★</span>
         <span style={{color:"#9333ea",fontSize:11,fontWeight:700}}>Modo Vendedor — Todos los precios visibles</span>
       </div>}
+      {clienteTab==="catalog"&&<>
       {prodLoad&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando productos de Firebase...</div>}
       {!prodLoad&&<>
         <Buscador search={search} ds={ds} onChange={setSearch} count={filtered.length} mob={mob}/>
@@ -1517,6 +1668,63 @@ export default function App(){
         )}
         <Pager total={filtered.length} pg={page} setPg={setPage} ps={PS}/>
       </>}
+      </>}
+
+      {clienteTab==="quotes"&&<div style={{marginTop:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
+          <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>Mis Cotizaciones</span>
+          <button onClick={loadQuotes} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"8px 14px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ RECARGAR</button>
+        </div>
+        {quotesLoad&&<div style={{textAlign:"center",padding:30,color:GRL}}>Cargando cotizaciones...</div>}
+        {!quotesLoad&&quotes.length===0&&(
+          <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
+            <div style={{fontSize:36,marginBottom:10}}>📋</div>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Sin cotizaciones aún</div>
+            <div style={{fontSize:12}}>Las cotizaciones que generes aparecerán aquí</div>
+          </div>
+        )}
+        {!quotesLoad&&quotes.map((q,i)=>(
+          <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:8,padding:14,marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
+              <div>
+                <div style={{fontWeight:700,fontSize:13,color:OR}}>{q.folio}</div>
+                <div style={{color:GRL,fontSize:11,marginTop:2}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"})}</div>
+              </div>
+              <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</span>
+            </div>
+            <div style={{fontSize:12,color:GRL,marginBottom:4}}>Cliente: <strong style={{color:"#1a1a1a"}}>{q.cliente||q.empresa||q.nombre||"—"}</strong></div>
+            <div style={{fontSize:11,color:GRL,marginBottom:10}}>{(q.items||[]).length} producto{(q.items||[]).length!==1?"s":""} · Vigencia: {q.vigencia||"—"}</div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+              <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
+                style={{flex:1,padding:"8px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600}}>
+                {quoteDetail?.folio===q.folio?"▲ Ocultar detalle":"▼ Ver detalle"}
+              </button>
+              <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
+                style={{flex:2,padding:"8px",background:OR,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:700}}>
+                📄 Regenerar PDF
+              </button>
+            </div>
+            {quoteDetail?.folio===q.folio&&(
+              <div style={{marginTop:10,borderTop:"1px solid "+BD,paddingTop:10}}>
+                <div style={{fontSize:10,color:GRL,fontWeight:700,marginBottom:6}}>PRODUCTOS</div>
+                {(q.items||[]).map((it,j)=>(
+                  <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"5px 0",borderBottom:"1px solid #f3f4f6"}}>
+                    <div style={{flex:1}}>
+                      <span style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</span>
+                      <div style={{marginTop:1}}>{it.descripcion}</div>
+                    </div>
+                    <div style={{textAlign:"right",marginLeft:8,whiteSpace:"nowrap"}}>
+                      <div style={{color:GRL,fontSize:10}}>{it.cantidad} pz × {new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio||0)}</div>
+                      <div style={{fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</div>
+                    </div>
+                  </div>
+                ))}
+                {q.nota&&<div style={{marginTop:8,fontSize:11,color:GRL}}>📝 {q.nota}</div>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>}
     </div>
   </div>;
 }
