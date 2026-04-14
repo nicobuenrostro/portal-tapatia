@@ -234,204 +234,239 @@ async function loadImageBase64(url){
 }
 
 // ── Generador de PDF de cotización ───────────────────────────
-// clienteLabel: string resuelto antes de llamar (ver lógica en CartPanel)
 async function generarPDF({folio, session, items, nota, vigencia, clienteLabel}){
-  const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
-  const W = 210, M = 15;
-  const HDR_H = 42; // altura del header naranja
+  const doc2  = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
+  const W     = 210;
+  const ML    = 14;   // margen izquierdo
+  const MR    = 14;   // margen derecho
+  const CW    = W - ML - MR; // ancho útil = 182mm
+  const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
 
-  // ── Fondo header naranja ──────────────────────────────────
-  doc2.setFillColor(255,107,6);
-  doc2.rect(0, 0, W, HDR_H, "F");
+  // ════════════════════════════════════════════════════════════
+  // HEADER — fondo naranja
+  // ════════════════════════════════════════════════════════════
+  const HDR = 44;
+  doc2.setFillColor(255, 107, 6);
+  doc2.rect(0, 0, W, HDR, "F");
 
-  // ── Logo (intenta cargar; si falla usa texto) ─────────────
-  const logoUrl = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
+  // Logo
+  const logoUrl  = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
   const logoData = await loadImageBase64(logoUrl);
   if(logoData){
-    // Logo aprox 55mm ancho × 18mm alto, margen top 6
-    try { doc2.addImage(logoData, "PNG", M, 6, 55, 18); } catch(e){}
+    try { doc2.addImage(logoData, "PNG", ML, 6, 52, 17); } catch(e){}
   } else {
-    // Fallback texto
-    doc2.setTextColor(255,255,255);
-    doc2.setFontSize(18); doc2.setFont("helvetica","bold");
-    doc2.text("GRUPO TAPATÍA", M, 16);
+    doc2.setTextColor(255,255,255); doc2.setFontSize(16); doc2.setFont("helvetica","bold");
+    doc2.text("GRUPO TAPATIA", ML, 16);
   }
 
-  // ── Datos empresa (izquierda, bajo el logo) ───────────────
+  // Datos empresa (columna izquierda, bajo logo)
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(7);
+  doc2.text("Importadores de llantas agricolas, industriales, jardineria y remolques", ML, 27);
+  doc2.text("Tlaquepaque, Jalisco, Mexico  |  ventas@llanteratapatia.com  |  www.tapatia.app", ML, 32);
+
+  // Bloque COTIZACION (columna derecha)
+  const BX = W - MR - 56;
+  doc2.setFillColor(200, 70, 0);
+  doc2.roundedRect(BX, 5, 56, 34, 2, 2, "F");
   doc2.setTextColor(255,255,255);
-  doc2.setFontSize(7.5); doc2.setFont("helvetica","normal");
-  doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques", M, 28);
-  doc2.text("Tlaquepaque, Jalisco, México", M, 33);
-  doc2.text("ventas@llanteratapatia.com  |  www.tapatia.app", M, 38);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(13);
+  doc2.text("COTIZACION", BX + 28, 16, {align:"center"});
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(9);
+  doc2.text(folio, BX + 28, 24, {align:"center"});
+  doc2.setFontSize(7);
+  doc2.text(fecha, BX + 28, 30, {align:"center"});
 
-  // ── Bloque COTIZACIÓN (derecha) ───────────────────────────
-  doc2.setFillColor(200,70,0);
-  doc2.rect(138, 4, 57, 34, "F");
-  doc2.setTextColor(255,255,255);
-  doc2.setFontSize(15); doc2.setFont("helvetica","bold");
-  doc2.text("COTIZACIÓN", 166.5, 16, {align:"center"});
-  doc2.setFontSize(10); doc2.setFont("helvetica","normal");
-  doc2.text(folio, 166.5, 24, {align:"center"});
-  const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
-  doc2.setFontSize(7.5);
-  doc2.text(fecha, 166.5, 31, {align:"center"});
+  // ════════════════════════════════════════════════════════════
+  // BLOQUE DATOS DE COTIZACION
+  // ════════════════════════════════════════════════════════════
+  let y = HDR + 6;
+  doc2.setFillColor(248, 248, 248);
+  doc2.setDrawColor(220, 220, 220); doc2.setLineWidth(0.2);
+  doc2.roundedRect(ML, y, CW, 26, 2, 2, "FD");
 
-  // ── Bloque DATOS DE COTIZACIÓN ────────────────────────────
-  const vig = vigencia || "15 días naturales";
-  let y = HDR_H + 8;
-
-  doc2.setFillColor(245,245,245);
-  doc2.rect(M, y-4, W-M*2, 28, "F");
-  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.1);
-  doc2.rect(M, y-4, W-M*2, 28);
-
-  doc2.setTextColor(255,107,6); doc2.setFontSize(8); doc2.setFont("helvetica","bold");
-  doc2.text("DATOS DE COTIZACIÓN", M+3, y+1);
-
-  // Línea separadora bajo título
+  // Título
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(255,107,6);
+  doc2.text("DATOS DE COTIZACION", ML + 4, y + 5);
   doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.3);
-  doc2.line(M+3, y+3, W-M-3, y+3);
+  doc2.line(ML + 4, y + 6.5, ML + CW - 4, y + 6.5);
 
-  y += 7;
-  const col1x=M+3, col2x=M+28, col3x=110, col4x=133;
-  const lh=5.5; // line height
+  // Cuadrícula 2 columnas × 3 filas
+  const c1 = ML + 4, c2 = ML + 24, c3 = ML + CW/2 + 4, c4 = ML + CW/2 + 22;
+  const lh = 5.2;
+  let dy = y + 11;
 
-  // Fila 1: Folio | Fecha
-  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5);
-  doc2.text("Folio:", col1x, y);
-  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
-  doc2.text(folio, col2x, y);
-  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
-  doc2.text("Fecha:", col3x, y);
-  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
-  doc2.text(fecha, col4x, y);
+  const field = (label, value, x1, x2, yy) => {
+    doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(120,120,120);
+    doc2.text(label, x1, yy);
+    doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
+    doc2.text(String(value||"—"), x2, yy);
+  };
 
-  y += lh;
-  // Fila 2: Elaboró | Vigencia
-  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
-  doc2.text("Elaboró:", col1x, y);
-  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
-  doc2.text(session.nombre||"—", col2x, y);
-  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
-  doc2.text("Vigencia:", col3x, y);
-  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
-  doc2.text(vig, col4x, y);
+  field("Folio:",    folio,           c1, c2, dy);
+  field("Fecha:",    fecha,           c3, c4, dy); dy += lh;
+  field("Elaboro:",  session.nombre,  c1, c2, dy);
+  field("Vigencia:", vigencia||"15 dias naturales", c3, c4, dy); dy += lh;
+  // Cliente — ancho completo
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(120,120,120);
+  doc2.text("Cliente:", c1, dy);
+  doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.setFontSize(7.5);
+  const clienteTxt = doc2.splitTextToSize(clienteLabel||"Publico en general", CW - 25)[0];
+  doc2.text(clienteTxt, c2, dy);
 
-  y += lh;
-  // Fila 3: Cliente (ancho completo)
-  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
-  doc2.text("Cliente:", col1x, y);
-  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
-  // truncar si es muy largo
-  const clienteTxt = doc2.splitTextToSize(clienteLabel||"Público en general", W-M*2-30)[0];
-  doc2.text(clienteTxt, col2x, y);
-
-  y += 10;
-  const rows = items.map((it,i) => [
-    i+1,
+  // ════════════════════════════════════════════════════════════
+  // TABLA DE PRODUCTOS
+  // ════════════════════════════════════════════════════════════
+  y = HDR + 6 + 26 + 6;
+  const rows = items.map((it, i) => [
+    i + 1,
     it.codigo,
     it.descripcion,
     it.cantidad,
     new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio),
     new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio * it.cantidad),
   ]);
+
   doc2.autoTable({
     startY: y,
-    head: [["#","CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"]],
-    body: rows,
-    margin: {left:M, right:M},
-    headStyles: {fillColor:[255,107,6], textColor:255, fontStyle:"bold", fontSize:8, halign:"center"},
-    bodyStyles: {fontSize:8, textColor:[40,40,40]},
-    columnStyles: {
-      0:{halign:"center", cellWidth:7},
-      1:{cellWidth:28},
-      2:{cellWidth:82},
-      3:{halign:"center", cellWidth:13},
-      4:{halign:"right", cellWidth:22},
-      5:{halign:"right", cellWidth:22},
+    head:   [["#","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
+    body:   rows,
+    margin: {left: ML, right: MR},
+    styles: {
+      font: "helvetica",
+      fontSize: 8,
+      cellPadding: {top:3, bottom:3, left:3, right:3},
+      overflow: "linebreak",
+      textColor: [40,40,40],
+      lineColor: [220,220,220],
+      lineWidth: 0.15,
     },
-    tableWidth: 180,
-    alternateRowStyles:{fillColor:[250,250,250]},
-    tableLineColor:[220,220,220],
-    tableLineWidth:0.1,
+    headStyles: {
+      fillColor:  [255,107,6],
+      textColor:  [255,255,255],
+      fontStyle:  "bold",
+      fontSize:   7.5,
+      halign:     "center",
+      cellPadding:{top:4, bottom:4, left:3, right:3},
+    },
+    alternateRowStyles: {fillColor:[250,250,250]},
+    columnStyles: {
+      0: {halign:"center", cellWidth:7},
+      1: {halign:"left",   cellWidth:32},
+      2: {halign:"left",   cellWidth:"auto"},
+      3: {halign:"center", cellWidth:13},
+      4: {halign:"right",  cellWidth:24},
+      5: {halign:"right",  cellWidth:24},
+    },
   });
 
-  const subtotal = items.reduce((s,it)=>s+it.precio*it.cantidad,0);
-  const finalY   = doc2.lastAutoTable.finalY + 6;
-  const RX = W - M; // margen derecho = 195
-  doc2.setFillColor(245,245,245);
-  doc2.rect(120, finalY-4, RX-120, 20, "F");
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(9); doc2.setTextColor(80,80,80);
-  doc2.text("Subtotal:", 122, finalY+2);
-  doc2.text("IVA:", 122, finalY+8);
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(10); doc2.setTextColor(40,40,40);
-  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), RX, finalY+2, {align:"right"});
-  doc2.setFontSize(7.5); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
-  doc2.text("(Segun tipo de producto - consultar factura)", RX, finalY+8, {align:"right"});
-  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.5);
-  doc2.line(120, finalY+10, RX, finalY+10);
-  doc2.setFillColor(255,107,6);
-  doc2.rect(120, finalY+11, RX-120, 9, "F");
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(11);
-  doc2.text("TOTAL:", 122, finalY+17.5);
-  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), RX, finalY+17.5, {align:"right"});
+  // ════════════════════════════════════════════════════════════
+  // TOTALES
+  // ════════════════════════════════════════════════════════════
+  const subtotal = items.reduce((s, it) => s + it.precio * it.cantidad, 0);
+  const iva      = subtotal * 0.16;
+  const total    = subtotal + iva;
+  const fmt      = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
 
-  if(nota){
-    const ny = finalY+28;
-    doc2.setTextColor(60,60,60); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
-    doc2.text("OBSERVACIONES:", M, ny);
-    doc2.setFont("helvetica","normal");
-    const lines = doc2.splitTextToSize(nota, W-M*2-5);
-    doc2.text(lines, M, ny+5);
+  let ty = doc2.lastAutoTable.finalY + 5;
+  const TW  = 80;   // ancho del bloque totales
+  const TX  = W - MR - TW;  // x inicio bloque
+
+  // Fondo bloque totales
+  doc2.setFillColor(248,248,248);
+  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.2);
+  doc2.roundedRect(TX, ty, TW, 30, 2, 2, "FD");
+
+  const tLabelX = TX + 4;
+  const tValueX = TX + TW - 4;
+  const tLH     = 6.5;
+  let   tY      = ty + 8;
+
+  // Subtotal
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
+  doc2.text("Subtotal:", tLabelX, tY);
+  doc2.setTextColor(30,30,30);
+  doc2.text(fmt(subtotal), tValueX, tY, {align:"right"}); tY += tLH;
+
+  // IVA 16%
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
+  doc2.text("IVA (16%):", tLabelX, tY);
+  doc2.setTextColor(30,30,30);
+  doc2.text(fmt(iva), tValueX, tY, {align:"right"}); tY += tLH - 1;
+
+  // Línea divisora naranja
+  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
+  doc2.line(TX + 3, tY, TX + TW - 3, tY); tY += 3;
+
+  // Total destacado
+  doc2.setFillColor(255,107,6);
+  doc2.roundedRect(TX + 2, tY - 1, TW - 4, 9, 1, 1, "F");
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
+  doc2.text("TOTAL:", tLabelX + 1, tY + 6);
+  doc2.text(fmt(total), tValueX - 1, tY + 6, {align:"right"});
+
+  // Nota IVA agricola
+  doc2.setFont("helvetica","italic"); doc2.setFontSize(6.5); doc2.setTextColor(140,140,140);
+  doc2.text("* Productos agricolas no causan IVA (IVA = $0.00 en esos casos)", TX, ty + 32);
+
+  // ════════════════════════════════════════════════════════════
+  // OBSERVACIONES
+  // ════════════════════════════════════════════════════════════
+  if(nota && nota.trim()){
+    let ny = ty + 38;
+    doc2.setFillColor(255,251,235);
+    doc2.setDrawColor(253,211,77); doc2.setLineWidth(0.2);
+    const notaLines = doc2.splitTextToSize(nota.trim(), CW - 8);
+    const notaH = 8 + notaLines.length * 4.5;
+    doc2.roundedRect(ML, ny, CW, notaH, 2, 2, "FD");
+    doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(180,120,0);
+    doc2.text("OBSERVACIONES:", ML + 4, ny + 5);
+    doc2.setFont("helvetica","normal"); doc2.setTextColor(60,60,60);
+    doc2.text(notaLines, ML + 4, ny + 10);
   }
 
-  // ── Sección datos bancarios ───────────────────────────────
-  const bankY = doc2.lastAutoTable.finalY + (nota ? 28 : 10);
-  // Verificar que no se salga de la página (dejar espacio para footer)
-  const bankStartY = Math.max(bankY, doc2.lastAutoTable.finalY + 8);
+  // ════════════════════════════════════════════════════════════
+  // DATOS BANCARIOS
+  // ════════════════════════════════════════════════════════════
+  let by2 = doc2.lastAutoTable.finalY + (nota&&nota.trim() ? 48 : 42);
+  // Si se sale de la página, nueva página
+  if(by2 + 30 > 270){ doc2.addPage(); by2 = 15; }
 
-  doc2.setFillColor(240,247,255);
-  doc2.setDrawColor(0,100,200);
-  doc2.setLineWidth(0.3);
-  doc2.rect(M, bankStartY, W-M*2, 22, "FD");
+  doc2.setFillColor(235,244,255);
+  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.2);
+  doc2.roundedRect(ML, by2, CW, 22, 2, 2, "FD");
 
-  // Ícono / etiqueta banco
-  doc2.setFontSize(8); doc2.setFont("helvetica","bold"); doc2.setTextColor(0,80,180);
-  doc2.text("DATOS PARA TRANSFERENCIA / DEPOSITO", M+3, bankStartY+6);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(0,80,180);
+  doc2.text("DATOS PARA TRANSFERENCIA / DEPOSITO", ML + 4, by2 + 5);
+  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.2);
+  doc2.line(ML + 4, by2 + 6.5, ML + CW - 4, by2 + 6.5);
 
-  // Línea separadora
-  doc2.setDrawColor(180,210,255); doc2.setLineWidth(0.2);
-  doc2.line(M+3, bankStartY+8, W-M-3, bankStartY+8);
+  const bRow = (label, value, x1, x2, yy) => {
+    doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
+    doc2.text(label, x1, yy);
+    doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
+    doc2.text(value, x2, yy);
+  };
 
-  const bx1=M+3, bx2=M+28, bx3=105, bx4=128;
-  const by=bankStartY+13;
-  doc2.setFontSize(7.5); doc2.setTextColor(80,80,80); doc2.setFont("helvetica","bold");
-  doc2.text("Banco:", bx1, by);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
-  doc2.text("BBVA Bancomer", bx2, by);
+  const bC1 = ML + 4, bC2 = ML + 22, bC3 = ML + CW/2 + 4, bC4 = ML + CW/2 + 20;
+  bRow("Banco:",    "BBVA Bancomer",                      bC1, bC2, by2 + 12);
+  bRow("Titular:",  "Comercial Llantera Tapatia SA de CV", bC3, bC4, by2 + 12);
+  bRow("Cuenta:",   "0154483138",                         bC1, bC2, by2 + 18);
+  bRow("CLABE:",    "012320001544831389",                  bC3, bC4, by2 + 18);
 
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
-  doc2.text("Titular:", bx3, by);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(20,20,20);
-  doc2.text("Comercial Llantera Tapatía SA de CV", bx4, by);
+  // ════════════════════════════════════════════════════════════
+  // FOOTER
+  // ════════════════════════════════════════════════════════════
+  const FY = 282;
+  doc2.setFillColor(255,107,6);
+  doc2.rect(0, FY, W, 15, "F");
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(255,255,255);
+  doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.", W/2, FY + 4.5, {align:"center"});
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(6.5);
+  doc2.text("Esta cotizacion es informativa y no constituye un pedido, factura ni compromiso de entrega.", W/2, FY + 9, {align:"center"});
+  doc2.text("Grupo Tapatia  |  tapatia.app  |  " + fecha, W/2, FY + 13, {align:"center"});
 
-  const by2=bankStartY+18;
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
-  doc2.text("No. Cuenta:", bx1, by2);
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(20,20,20);
-  doc2.text("0154483138", bx2, by2);
-
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(80,80,80);
-  doc2.text("CLABE:", bx3, by2);
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(20,20,20);
-  doc2.text("012320001544831389", bx4, by2);
-
-  // ── Footer ───────────────────────────────────────────────
-  const py = 282;
-
-  doc2.save(`Cotizacion_${folio}.pdf`);
+  doc2.save("Cotizacion_" + folio + ".pdf");
 }
-
 // ── Carrito de cotización ─────────────────────────────────────
 function CartPanel({cart, setCart, session, db, onClose, mob}){
   const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
