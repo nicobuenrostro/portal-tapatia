@@ -219,56 +219,112 @@ function Pager({total,pg,setPg,ps=50}){
   </div>;
 }
 
+// ── Cargar imagen como base64 para PDF ───────────────────────
+async function loadImageBase64(url){
+  try {
+    const res = await fetch(url);
+    const blob = await res.blob();
+    return new Promise((resolve)=>{
+      const reader = new FileReader();
+      reader.onloadend = () => resolve(reader.result);
+      reader.onerror  = () => resolve(null);
+      reader.readAsDataURL(blob);
+    });
+  } catch(e){ return null; }
+}
+
 // ── Generador de PDF de cotización ───────────────────────────
-async function generarPDF({folio, session, items, nota, vigencia}){
+// clienteLabel: string resuelto antes de llamar (ver lógica en CartPanel)
+async function generarPDF({folio, session, items, nota, vigencia, clienteLabel}){
   const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
   const W = 210, M = 15;
+  const HDR_H = 42; // altura del header naranja
 
+  // ── Fondo header naranja ──────────────────────────────────
   doc2.setFillColor(255,107,6);
-  doc2.rect(0, 0, W, 38, "F");
+  doc2.rect(0, 0, W, HDR_H, "F");
 
+  // ── Logo (intenta cargar; si falla usa texto) ─────────────
+  const logoUrl = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
+  const logoData = await loadImageBase64(logoUrl);
+  if(logoData){
+    // Logo aprox 55mm ancho × 18mm alto, margen top 6
+    try { doc2.addImage(logoData, "PNG", M, 6, 55, 18); } catch(e){}
+  } else {
+    // Fallback texto
+    doc2.setTextColor(255,255,255);
+    doc2.setFontSize(18); doc2.setFont("helvetica","bold");
+    doc2.text("GRUPO TAPATÍA", M, 16);
+  }
+
+  // ── Datos empresa (izquierda, bajo el logo) ───────────────
   doc2.setTextColor(255,255,255);
-  doc2.setFontSize(22);
-  doc2.setFont("helvetica","bold");
-  doc2.text("GRUPO TAPATÍA", M, 16);
-  doc2.setFontSize(9);
-  doc2.setFont("helvetica","normal");
-  doc2.text("Llantas Agrícolas, Industriales y para Motocicleta", M, 22);
-  doc2.text("Guadalajara, Jalisco, México  |  ventas@grupotapatia.com", M, 27);
-  doc2.text("www.tapatia.app", M, 32);
+  doc2.setFontSize(7.5); doc2.setFont("helvetica","normal");
+  doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques", M, 28);
+  doc2.text("Tlaquepaque, Jalisco, México", M, 33);
+  doc2.text("ventas@llanteratapatia.com  |  www.tapatia.app", M, 38);
 
-  doc2.setFillColor(230,90,0);
-  doc2.rect(140, 6, 55, 26, "F");
+  // ── Bloque COTIZACIÓN (derecha) ───────────────────────────
+  doc2.setFillColor(200,70,0);
+  doc2.rect(138, 4, 57, 34, "F");
   doc2.setTextColor(255,255,255);
-  doc2.setFontSize(14);
-  doc2.setFont("helvetica","bold");
-  doc2.text("COTIZACIÓN", 167.5, 17, {align:"center"});
-  doc2.setFontSize(11);
-  doc2.text(folio, 167.5, 26, {align:"center"});
-
+  doc2.setFontSize(15); doc2.setFont("helvetica","bold");
+  doc2.text("COTIZACIÓN", 166.5, 16, {align:"center"});
+  doc2.setFontSize(10); doc2.setFont("helvetica","normal");
+  doc2.text(folio, 166.5, 24, {align:"center"});
   const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
-  const vig   = vigencia || "15 días naturales";
-  doc2.setTextColor(60,60,60);
-  doc2.setFontSize(9);
-  doc2.setFont("helvetica","normal");
-  let y = 46;
+  doc2.setFontSize(7.5);
+  doc2.text(fecha, 166.5, 31, {align:"center"});
+
+  // ── Bloque DATOS DE COTIZACIÓN ────────────────────────────
+  const vig = vigencia || "15 días naturales";
+  let y = HDR_H + 8;
+
   doc2.setFillColor(245,245,245);
-  doc2.rect(M, y-5, W-M*2, 22, "F");
-  doc2.setFont("helvetica","bold");
-  doc2.text("DATOS DE COTIZACIÓN", M+2, y);
-  y += 5;
-  doc2.setFont("helvetica","normal");
-  doc2.text(`Folio:`, M+2, y);         doc2.setFont("helvetica","bold"); doc2.text(folio, M+22, y);
-  doc2.setFont("helvetica","normal");
-  doc2.text(`Fecha:`, 90, y);          doc2.setFont("helvetica","bold"); doc2.text(fecha, 108, y);
-  y += 5;
-  doc2.setFont("helvetica","normal");
-  doc2.text(`Elaboró:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.nombre, M+22, y);
-  doc2.setFont("helvetica","normal");
-  doc2.text(`Vigencia:`, 90, y);       doc2.setFont("helvetica","bold"); doc2.text(vig, 108, y);
-  y += 5;
-  doc2.setFont("helvetica","normal");
-  doc2.text(`Cliente:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.empresa||session.nombre, M+22, y);
+  doc2.rect(M, y-4, W-M*2, 28, "F");
+  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.1);
+  doc2.rect(M, y-4, W-M*2, 28);
+
+  doc2.setTextColor(255,107,6); doc2.setFontSize(8); doc2.setFont("helvetica","bold");
+  doc2.text("DATOS DE COTIZACIÓN", M+3, y+1);
+
+  // Línea separadora bajo título
+  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.3);
+  doc2.line(M+3, y+3, W-M-3, y+3);
+
+  y += 7;
+  const col1x=M+3, col2x=M+28, col3x=110, col4x=133;
+  const lh=5.5; // line height
+
+  // Fila 1: Folio | Fecha
+  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5);
+  doc2.text("Folio:", col1x, y);
+  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
+  doc2.text(folio, col2x, y);
+  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
+  doc2.text("Fecha:", col3x, y);
+  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
+  doc2.text(fecha, col4x, y);
+
+  y += lh;
+  // Fila 2: Elaboró | Vigencia
+  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
+  doc2.text("Elaboró:", col1x, y);
+  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
+  doc2.text(session.nombre||"—", col2x, y);
+  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
+  doc2.text("Vigencia:", col3x, y);
+  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
+  doc2.text(vig, col4x, y);
+
+  y += lh;
+  // Fila 3: Cliente (ancho completo)
+  doc2.setTextColor(100,100,100); doc2.setFont("helvetica","bold");
+  doc2.text("Cliente:", col1x, y);
+  doc2.setTextColor(30,30,30); doc2.setFont("helvetica","normal");
+  // truncar si es muy largo
+  const clienteTxt = doc2.splitTextToSize(clienteLabel||"Público en general", W-M*2-30)[0];
+  doc2.text(clienteTxt, col2x, y);
 
   y += 10;
   const rows = items.map((it,i) => [
@@ -346,6 +402,17 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
   const [generating, setGenerating] = useState(false);
   const [folioMsg, setFolioMsg] = useState("");
 
+  // ── Campo cliente dinámico ─────────────────────────────────
+  // Cliente: si es vendedor/admin → editable con opción "Público en general"
+  //          si es cliente → automático, no editable
+  const clienteAuto = session?.empresa?.trim() || session?.nombre?.trim() || "Público en general";
+  const [clienteManual, setClienteManual]   = useState("");
+  const [esPublico,     setEsPublico]       = useState(false);
+  // Valor final que va al PDF
+  const clienteLabel = isVend
+    ? (esPublico ? "Público en general" : (clienteManual.trim() || "Público en general"))
+    : clienteAuto;
+
   const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad, 0);
   const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
 
@@ -379,11 +446,11 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
     try{
       const folio=await getNextFolio();
       setFolioMsg(`📄 ${folio} — generando PDF...`);
-      await generarPDF({folio,session,items:cart,nota,vigencia});
+      await generarPDF({folio,session,items:cart,nota,vigencia,clienteLabel});
       await setDoc(doc(db,"cotizaciones",folio),{
         folio,usuario:session.usuario,nombre:session.nombre,
-        empresa:session.empresa||"",items:cart,
-        subtotal,nota,vigencia,fecha:new Date().toISOString(),
+        empresa:session.empresa||"",cliente:clienteLabel,
+        items:cart,subtotal,nota,vigencia,fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
       setTimeout(()=>{setCart([]);onClose();},2000);
@@ -459,6 +526,37 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
         {/* ── Footer ── */}
         {cart.length>0&&(
           <div style={{borderTop:"2px solid #e5e7eb",padding:"14px 16px",background:"#fff",flexShrink:0}}>
+
+            {/* ── Campo CLIENTE ── */}
+            <div style={{marginBottom:12,background:"#f9f9f9",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 12px"}}>
+              <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:6,fontWeight:700}}>CLIENTE EN LA COTIZACIÓN</div>
+              {isVend ? (
+                /* Vendedor / Admin: editable */
+                <div>
+                  <input
+                    value={esPublico?"Público en general":clienteManual}
+                    onChange={e=>{ setClienteManual(e.target.value); setEsPublico(false); }}
+                    disabled={esPublico}
+                    placeholder="Nombre o razón social del cliente..."
+                    style={{width:"100%",padding:"7px 10px",border:"1px solid #d1d5db",borderRadius:6,
+                      fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6,
+                      background:esPublico?"#f3f4f6":"#fff",color:esPublico?GRL:"#1a1a1a"}}/>
+                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:11,color:GRL}}>
+                    <input type="checkbox" checked={esPublico} onChange={e=>{setEsPublico(e.target.checked);if(e.target.checked)setClienteManual("");}}
+                      style={{width:14,height:14,accentColor:OR,cursor:"pointer"}}/>
+                    Público en general
+                  </label>
+                </div>
+              ):(
+                /* Cliente: solo lectura */
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <span style={{fontSize:13,fontWeight:600,color:"#1a1a1a"}}>{clienteAuto}</span>
+                  <span style={{fontSize:10,color:GRL,background:"#f3f4f6",padding:"2px 7px",borderRadius:3}}>automático</span>
+                </div>
+              )}
+            </div>
+
+            {/* Vigencia y observaciones */}
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:10}}>
               <div>
                 <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
