@@ -234,7 +234,7 @@ async function loadImageBase64(url){
 }
 
 // ── Generador de PDF de cotización ───────────────────────────
-async function generarPDF({folio, session, items, nota, vigencia, clienteLabel}){
+async function generarPDF({folio, session, items, nota, vigencia, clienteLabel, descuento=0, envio=0}){
   const doc2  = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
   const W     = 210;
   const ML    = 14;   // margen izquierdo
@@ -410,32 +410,42 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
   const ivaTotal = conIva.reduce((s,it)=>s + it.precio*it.cantidad*0.16, 0);
   const granTotal= subtSin + subtCon + ivaTotal;
 
-  const hayMixto = sinIva.length > 0 && conIva.length > 0;
+  const hayMixto  = sinIva.length > 0 && conIva.length > 0;
+  const descMonto = granTotal * (descuento / 100);
+  const totalFinal= granTotal - descMonto + envio;
 
-  let ty = y + 2;
   const TW = 82;
   const TX = W - MR - TW;
+  const tLX = TX + 4;
+  const tVX = TX + TW - 4;
+  const tLH = 7;
 
-  // Calcular altura del bloque según filas necesarias
-  const filas = hayMixto ? 5 : (conIva.length>0 ? 4 : 2);
-  const boxH  = 8 + filas * 7 + 10; // padding + filas + barra total
+  // ── Precalcular filas para dibujar el rect ANTES del texto ──
+  // Filas: subtotales + IVA + descuento? + envio? + separador + total
+  let numFilas = 0;
+  if(hayMixto)      numFilas += 2; else numFilas += 1; // subtotal(es)
+  numFilas += 1;                                        // IVA
+  if(descuento > 0) numFilas += 1;
+  if(envio > 0)     numFilas += 1;
+  const boxH  = 7 + numFilas * tLH + 3 + 10 + 4;      // padding + filas + sep + barra TOTAL + margen
 
+  let ty = y + 4;
+  // Si no cabe en la página, nueva página
+  if(ty + boxH > 272){ doc2.addPage(); ty = 15; }
+
+  // Dibujar fondo del bloque ahora que sabemos la altura exacta
   doc2.setFillColor(248,248,248);
   doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.15);
   doc2.rect(TX, ty, TW, boxH, "FD");
 
-  const tLX = TX + 4;
-  const tVX = TX + TW - 4;
-  const tLH = 7;
-  let   tY  = ty + 7;
+  let tY = ty + 7;
 
+  // ── Filas de subtotales ──
   if(hayMixto){
-    // Subtotal sin IVA
     doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
     doc2.text("Subtotal sin IVA:", tLX, tY);
     doc2.setTextColor(30,30,30);
     doc2.text(fmt(subtSin), tVX, tY, {align:"right"}); tY += tLH;
-    // Subtotal con IVA
     doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80);
     doc2.text("Subtotal con IVA:", tLX, tY);
     doc2.setTextColor(30,30,30);
@@ -452,7 +462,7 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
     doc2.text(fmt(subtCon), tVX, tY, {align:"right"}); tY += tLH;
   }
 
-  // IVA total (solo si hay productos con IVA)
+  // ── IVA ──
   if(conIva.length > 0){
     doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
     doc2.text("IVA (16%):", tLX, tY);
@@ -462,21 +472,39 @@ async function generarPDF({folio, session, items, nota, vigencia, clienteLabel})
     doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
     doc2.text("IVA:", tLX, tY);
     doc2.setFont("helvetica","italic"); doc2.setTextColor(160,160,160);
-    doc2.text("$0.00 (productos agricolas no causan IVA)", tVX, tY, {align:"right"}); tY += tLH;
+    doc2.text("$0.00", tVX, tY, {align:"right"}); tY += tLH;
   }
 
-  // Línea divisora
-  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
-  doc2.line(TX + 2, tY, TX + TW - 2, tY); tY += 2;
+  // ── Descuento (si aplica) ──
+  if(descuento > 0){
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(22,163,74);
+    doc2.text("Descuento (" + descuento + "%):", tLX, tY);
+    doc2.setFont("helvetica","bold");
+    doc2.text("-" + fmt(descMonto), tVX, tY, {align:"right"}); tY += tLH;
+  }
 
-  // Gran total naranja
+  // ── Envío (si aplica) — suma al total final ──
+  if(envio > 0){
+    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(37,99,235);
+    doc2.text("Envío:", tLX, tY);
+    doc2.setFont("helvetica","bold");
+    doc2.text("+" + fmt(envio), tVX, tY, {align:"right"}); tY += tLH;
+  }
+
+  // ── Línea divisora ──
+  tY += 1;
+  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
+  doc2.line(TX + 2, tY, TX + TW - 2, tY); tY += 3;
+
+  // ── Barra TOTAL naranja — siempre pegada al fondo del rect ──
   doc2.setFillColor(255,107,6);
-  doc2.rect(TX, tY, TW, 10, "F");
+  doc2.rect(TX, ty + boxH - 10, TW, 10, "F");
   doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
-  doc2.text("TOTAL:", tLX + 1, tY + 7);
-  doc2.text(fmt(granTotal), tVX - 1, tY + 7, {align:"right"});
+  doc2.text("TOTAL:", tLX + 1, ty + boxH - 3);
+  doc2.text(fmt(totalFinal), tVX - 1, ty + boxH - 3, {align:"right"});
+
   // Posición real donde terminó el bloque de totales
-  const totalesBottomY = tY + 10;
+  const totalesBottomY = ty + boxH;
 
   // ════════════════════════════════════════════════════════════
   // OBSERVACIONES
@@ -555,6 +583,8 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
   const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
   const [nota, setNota] = useState("");
   const [vigencia, setVigencia] = useState("7 días naturales");
+  const [descuento, setDescuento] = useState("");   // % descuento adicional
+  const [envio, setEnvio] = useState("");            // costo envío manual
   const [generating, setGenerating] = useState(false);
   const [folioMsg, setFolioMsg] = useState("");
 
@@ -602,14 +632,21 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
     try{
       const folio=await getNextFolio();
       setFolioMsg(`📄 ${folio} — generando PDF...`);
-      await generarPDF({folio,session,items:cart,nota,vigencia,clienteLabel});
+      const pctDesc = parseFloat(descuento)||0;
+      const costoEnvio = parseFloat(envio)||0;
+      await generarPDF({folio,session,items:cart,nota,vigencia,clienteLabel,descuento:pctDesc,envio:costoEnvio});
       const subtotalGuardar = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
       const ivaGuardar      = cart.filter(it=>String(it.iva||"NO").toUpperCase()==="SI").reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
+      const pctDescG  = parseFloat(descuento)||0;
+      const envioG    = parseFloat(envio)||0;
+      const descMontoG= (subtotalGuardar+ivaGuardar) * pctDescG / 100;
+      const totalFinalG = subtotalGuardar + ivaGuardar - descMontoG + envioG;
       await setDoc(doc(db,"cotizaciones",folio),{
         folio,usuario:session.usuario,nombre:session.nombre,
         empresa:session.empresa||"",cliente:clienteLabel,
-        items:cart,subtotal:subtotalGuardar+ivaGuardar,
-        iva:ivaGuardar,nota,vigencia,fecha:new Date().toISOString(),
+        items:cart,subtotal:totalFinalG,
+        iva:ivaGuardar,descuento:pctDescG,envio:envioG,
+        nota,vigencia,fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
       setTimeout(()=>{setCart([]);onClose();},2000);
@@ -716,7 +753,7 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
             </div>
 
             {/* Vigencia y observaciones */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:10}}>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:8}}>
               <div>
                 <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
                 <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
@@ -734,15 +771,54 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                   style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
               </div>
             </div>
+            {/* Descuento y Envío */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:8}}>
+              <div>
+                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>DESCUENTO ADICIONAL (%)</div>
+                <div style={{position:"relative"}}>
+                  <input type="number" min="0" max="100" step="0.5"
+                    value={descuento} onChange={e=>setDescuento(e.target.value)}
+                    placeholder="0"
+                    style={{width:"100%",padding:"7px 28px 7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+                  <span style={{position:"absolute",right:9,top:"50%",transform:"translateY(-50%)",color:GRL,fontSize:12,fontWeight:700}}>%</span>
+                </div>
+              </div>
+              <div>
+                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>COSTO DE ENVÍO ($)</div>
+                <div style={{position:"relative"}}>
+                  <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",color:GRL,fontSize:12}}>$</span>
+                  <input type="number" min="0" step="1"
+                    value={envio} onChange={e=>setEnvio(e.target.value)}
+                    placeholder="0"
+                    style={{width:"100%",padding:"7px 9px 7px 22px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+                </div>
+              </div>
+            </div>
 
             <div style={{background:"#f9f9f9",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 14px",marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                 <span style={{fontSize:12,color:GRL}}>{cart.length} producto{cart.length!==1?"s":""}</span>
                 <span style={{fontSize:12,color:GRL}}>{cart.reduce((s,it)=>s+it.cantidad,0)} piezas total</span>
               </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #e5e7eb",paddingTop:8,marginTop:4}}>
-                <span style={{fontSize:14,fontWeight:700,color:"#1a1a1a"}}>SUBTOTAL ANTES DE IVA:</span>
-                <span style={{fontSize:20,fontWeight:800,color:OR}}>{money2(subtotal)}</span>
+              {/* Subtotal base */}
+              <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #e5e7eb",paddingTop:6,marginTop:4}}>
+                <span style={{fontSize:12,color:GRL}}>Subtotal (antes IVA):</span>
+                <span style={{fontSize:12,color:"#1a1a1a",fontWeight:600}}>{money2(subtotal)}</span>
+              </div>
+              {/* Descuento */}
+              {parseFloat(descuento)>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                <span style={{fontSize:12,color:"#16a34a"}}>Descuento ({descuento}%):</span>
+                <span style={{fontSize:12,color:"#16a34a",fontWeight:600}}>-{money2(subtotal*(parseFloat(descuento)/100))}</span>
+              </div>}
+              {/* Envío */}
+              {parseFloat(envio)>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                <span style={{fontSize:12,color:"#2563eb"}}>Envío:</span>
+                <span style={{fontSize:12,color:"#2563eb",fontWeight:600}}>+{money2(parseFloat(envio))}</span>
+              </div>}
+              {/* Total estimado */}
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #e5e7eb",paddingTop:8,marginTop:6}}>
+                <span style={{fontSize:13,fontWeight:700,color:"#1a1a1a"}}>TOTAL ESTIMADO:</span>
+                <span style={{fontSize:18,fontWeight:800,color:OR}}>{money2(subtotal-(subtotal*(parseFloat(descuento||0)/100))+(parseFloat(envio||0)))}</span>
               </div>
             </div>
 
