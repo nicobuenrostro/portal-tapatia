@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import {
   initializeApp
 } from "firebase/app";
@@ -50,11 +50,14 @@ async function hashPassword(pwd){
 async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 
 // ── Firebase — lectura segura ─────────────────────────────────
+// NUNCA pisa el estado si hay error — retorna null en caso de fallo
 async function fbGetUsuarios(){
   try {
+    // Sin orderBy para evitar error si falta índice o campo nombre
     const snap=await getDocs(collection(db,"usuarios"));
     if(snap.empty) return [];
     const data=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Ordenar en cliente para no depender de índices Firebase
     return data.sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
   } catch(e){
     console.error("Error leyendo usuarios:",e);
@@ -64,9 +67,11 @@ async function fbGetUsuarios(){
 
 async function fbGetProductos(){
   try {
+    // Sin orderBy para evitar error si falta índice
     const snap=await getDocs(collection(db,"productos"));
     if(snap.empty) return [];
     const data=snap.docs.map(d=>({id:d.id,...d.data()}));
+    // Ordenar en cliente
     return data.sort((a,b)=>(a.codigo||"").localeCompare(b.codigo||""));
   } catch(e){
     console.error("Error leyendo productos:",e);
@@ -125,8 +130,9 @@ function detectTipo(s){
 // ── Permisos por rol ──────────────────────────────────────────
 function canDo(session, accion){
   const rol = session?.rol;
-  if(rol==="superadmin") return true;
+  if(rol==="superadmin") return true; // acceso total
   if(rol==="admin"){
+    // Solo puede: ver productos, subir CSV, crear/editar clientes y vendedores
     const permitido=["productos","clientes","subir_csv","crear_cliente","editar_cliente","toggle_estatus","eliminar_cliente"];
     return permitido.includes(accion);
   }
@@ -219,385 +225,141 @@ function Pager({total,pg,setPg,ps=50}){
   </div>;
 }
 
-// ── Cargar imagen como base64 para PDF ───────────────────────
-async function loadImageBase64(url){
-  try {
-    const res = await fetch(url);
-    const blob = await res.blob();
-    return new Promise((resolve)=>{
-      const reader = new FileReader();
-      reader.onloadend = () => resolve(reader.result);
-      reader.onerror  = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
-  } catch(e){ return null; }
-}
-
 // ── Generador de PDF de cotización ───────────────────────────
-async function generarPDF({folio, session, items, nota, vigencia, clienteLabel, descuento=0, envio=0}){
-  const doc2  = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
-  const W     = 210;
-  const ML    = 14;   // margen izquierdo
-  const MR    = 14;   // margen derecho
-  const CW    = W - ML - MR; // ancho útil = 182mm
-  const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
+async function generarPDF({folio, session, items, nota, vigencia}){
+  const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
+  const W = 210, M = 15;
 
-  // ════════════════════════════════════════════════════════════
-  // HEADER — fondo naranja
-  // ════════════════════════════════════════════════════════════
-  const HDR = 38;
-  doc2.setFillColor(255, 107, 6);
-  doc2.rect(0, 0, W, HDR, "F");
+  // Fondo header naranja
+  doc2.setFillColor(255,107,6);
+  doc2.rect(0, 0, W, 38, "F");
 
-  // Logo
-  const logoUrl  = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
-  const logoData = await loadImageBase64(logoUrl);
-  if(logoData){
-    try { doc2.addImage(logoData, "PNG", ML, 4, 46, 15); } catch(e){}
-  } else {
-    doc2.setTextColor(255,255,255); doc2.setFontSize(15); doc2.setFont("helvetica","bold");
-    doc2.text("GRUPO TAPATIA", ML, 13);
-  }
-
-  // Datos empresa bajo logo
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(6.5);
-  doc2.text("Importadores de llantas agricolas, industriales, jardineria y remolques", ML, 23);
-  doc2.text("Tlaquepaque, Jalisco, Mexico  |  ventas@llanteratapatia.com  |  www.tapatia.app", ML, 28);
-
-  // Bloque COTIZACION (columna derecha) — sin roundedRect, rect simple
-  const BX = W - MR - 50;
-  doc2.setFillColor(200, 70, 0);
-  doc2.rect(BX, 4, 50, 30, "F");
+  // Logo texto (si no hay imagen embebida usamos texto estilizado)
   doc2.setTextColor(255,255,255);
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(12);
-  doc2.text("COTIZACION", BX + 25, 14, {align:"center"});
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(9);
-  doc2.text(folio, BX + 25, 22, {align:"center"});
-  doc2.setFontSize(7);
-  doc2.text(fecha, BX + 25, 28, {align:"center"});
+  doc2.setFontSize(22);
+  doc2.setFont("helvetica","bold");
+  doc2.text("GRUPO TAPATÍA", M, 16);
+  doc2.setFontSize(9);
+  doc2.setFont("helvetica","normal");
+  doc2.text("Llantas Agrícolas, Industriales y para Motocicleta", M, 22);
+  doc2.text("Guadalajara, Jalisco, México  |  ventas@grupotapatia.com", M, 27);
+  doc2.text("www.tapatia.app", M, 32);
 
-  // ════════════════════════════════════════════════════════════
-  // BLOQUE DATOS DE COTIZACION
-  // ════════════════════════════════════════════════════════════
-  let y = HDR + 6;
-  doc2.setFillColor(248, 248, 248);
-  doc2.setDrawColor(220, 220, 220); doc2.setLineWidth(0.2);
-  doc2.roundedRect(ML, y, CW, 26, 2, 2, "FD");
+  // Etiqueta COTIZACIÓN
+  doc2.setFillColor(230,90,0);
+  doc2.rect(140, 6, 55, 26, "F");
+  doc2.setTextColor(255,255,255);
+  doc2.setFontSize(14);
+  doc2.setFont("helvetica","bold");
+  doc2.text("COTIZACIÓN", 167.5, 17, {align:"center"});
+  doc2.setFontSize(11);
+  doc2.text(folio, 167.5, 26, {align:"center"});
 
-  // Título
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(255,107,6);
-  doc2.text("DATOS DE COTIZACION", ML + 4, y + 5);
-  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.3);
-  doc2.line(ML + 4, y + 6.5, ML + CW - 4, y + 6.5);
+  // Datos cotización
+  const fecha = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
+  const vig   = vigencia || "15 días naturales";
+  doc2.setTextColor(60,60,60);
+  doc2.setFontSize(9);
+  doc2.setFont("helvetica","normal");
+  let y = 46;
+  doc2.setFillColor(245,245,245);
+  doc2.rect(M, y-5, W-M*2, 22, "F");
+  doc2.setFont("helvetica","bold");
+  doc2.text("DATOS DE COTIZACIÓN", M+2, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Folio:`, M+2, y);         doc2.setFont("helvetica","bold"); doc2.text(folio, M+22, y);
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Fecha:`, 90, y);          doc2.setFont("helvetica","bold"); doc2.text(fecha, 108, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Elaboró:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.nombre, M+22, y);
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Vigencia:`, 90, y);       doc2.setFont("helvetica","bold"); doc2.text(vig, 108, y);
+  y += 5;
+  doc2.setFont("helvetica","normal");
+  doc2.text(`Cliente:`, M+2, y);       doc2.setFont("helvetica","bold"); doc2.text(session.empresa||session.nombre, M+22, y);
 
-  // Cuadrícula 2 columnas × 3 filas
-  const c1 = ML + 4, c2 = ML + 24, c3 = ML + CW/2 + 4, c4 = ML + CW/2 + 22;
-  const lh = 5.2;
-  let dy = y + 11;
-
-  const field = (label, value, x1, x2, yy) => {
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(120,120,120);
-    doc2.text(label, x1, yy);
-    doc2.setFont("helvetica","normal"); doc2.setTextColor(30,30,30);
-    doc2.text(String(value||"—"), x2, yy);
-  };
-
-  field("Folio:",    folio,           c1, c2, dy);
-  field("Fecha:",    fecha,           c3, c4, dy); dy += lh;
-  field("Elaboro:",  session.nombre,  c1, c2, dy);
-  field("Vigencia:", vigencia||"15 dias naturales", c3, c4, dy); dy += lh;
-  // Cliente — ancho completo
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(120,120,120);
-  doc2.text("Cliente:", c1, dy);
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.setFontSize(7.5);
-  const clienteTxt = doc2.splitTextToSize(clienteLabel||"Publico en general", CW - 25)[0];
-  doc2.text(clienteTxt, c2, dy);
-
-  // ════════════════════════════════════════════════════════════
-  // TABLA DE PRODUCTOS
-  // ════════════════════════════════════════════════════════════
-  y = HDR + 6 + 26 + 8;
-
-  // Separar productos con y sin IVA
-  const conIva  = items.filter(it => String(it.iva||"NO").toUpperCase()==="SI");
-  const sinIva  = items.filter(it => String(it.iva||"NO").toUpperCase()!=="SI");
-
-  const fmt = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
-
-  const tableStyles = {
-    styles: {
-      font:"helvetica", fontSize:8,
-      cellPadding:{top:3.5,bottom:3.5,left:3,right:3},
-      overflow:"linebreak", textColor:[40,40,40], lineWidth:0,
+  // Tabla de productos
+  y += 10;
+  const rows = items.map((it,i) => [
+    i+1,
+    it.codigo,
+    it.descripcion,
+    it.cantidad,
+    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio),
+    new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio * it.cantidad),
+  ]);
+  doc2.autoTable({
+    startY: y,
+    head: [["#","CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"]],
+    body: rows,
+    margin: {left:M, right:M},
+    headStyles: {fillColor:[255,107,6], textColor:255, fontStyle:"bold", fontSize:8, halign:"center"},
+    bodyStyles: {fontSize:8, textColor:[40,40,40]},
+    columnStyles: {
+      0:{halign:"center", cellWidth:8},
+      1:{cellWidth:30},
+      2:{cellWidth:80},
+      3:{halign:"center", cellWidth:14},
+      4:{halign:"right", cellWidth:25},
+      5:{halign:"right", cellWidth:25},
     },
-    headStyles: {
-      fillColor:[255,107,6], textColor:[255,255,255],
-      fontStyle:"bold", fontSize:7.5, halign:"center",
-      cellPadding:{top:4,bottom:4,left:3,right:3}, lineWidth:0,
-    },
-    alternateRowStyles:{fillColor:[248,248,248]},
-    margin:{left:ML, right:MR},
-  };
+    alternateRowStyles:{fillColor:[250,250,250]},
+    tableLineColor:[220,220,220],
+    tableLineWidth:0.1,
+  });
 
-  const colStyles6 = {
-    0:{halign:"center",cellWidth:10},
-    1:{halign:"left",  cellWidth:32},
-    2:{halign:"left",  cellWidth:"auto"},
-    3:{halign:"center",cellWidth:13},
-    4:{halign:"right", cellWidth:24},
-    5:{halign:"right", cellWidth:24},
-  };
-
-  // ── Tabla productos SIN IVA ──────────────────────────────
-  if(sinIva.length > 0){
-    // Subtítulo
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
-    doc2.text("Productos sin IVA", ML, y);
-    y += 3;
-    const rowsSin = sinIva.map((it,i)=>[
-      i+1, it.codigo, it.descripcion, it.cantidad,
-      fmt(it.precio),
-      fmt(it.precio * it.cantidad),
-    ]);
-    doc2.autoTable({
-      startY: y,
-      head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE"]],
-      body:   rowsSin,
-      columnStyles: colStyles6,
-      ...tableStyles,
-    });
-    y = doc2.lastAutoTable.finalY + 4;
-  }
-
-  // ── Tabla productos CON IVA ──────────────────────────────
-  if(conIva.length > 0){
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
-    doc2.text("Productos con IVA (16%)", ML, y);
-    y += 3;
-    const rowsCon = conIva.map((it,i)=>{
-      const imp    = it.precio * it.cantidad;
-      const ivaP   = imp * 0.16;
-      const totP   = imp + ivaP;
-      return [
-        i+1, it.codigo, it.descripcion, it.cantidad,
-        fmt(it.precio), fmt(imp), fmt(ivaP), fmt(totP),
-      ];
-    });
-    doc2.autoTable({
-      startY: y,
-      head:   [["No.","CODIGO","DESCRIPCION","CANT.","P. UNIT.","IMPORTE","IVA 16%","TOTAL"]],
-      body:   rowsCon,
-      columnStyles: {
-        0:{halign:"center",cellWidth:10},
-        1:{halign:"left",  cellWidth:28},
-        2:{halign:"left",  cellWidth:"auto"},
-        3:{halign:"center",cellWidth:11},
-        4:{halign:"right", cellWidth:20},
-        5:{halign:"right", cellWidth:20},
-        6:{halign:"right", cellWidth:18},
-        7:{halign:"right", cellWidth:20},
-      },
-      ...tableStyles,
-    });
-    y = doc2.lastAutoTable.finalY + 4;
-  }
-
-  // ════════════════════════════════════════════════════════════
-  // TOTALES — calculados por partida
-  // ════════════════════════════════════════════════════════════
-  const subtSin  = sinIva.reduce((s,it)=>s + it.precio*it.cantidad, 0);
-  const subtCon  = conIva.reduce((s,it)=>s + it.precio*it.cantidad, 0);
-  const ivaTotal = conIva.reduce((s,it)=>s + it.precio*it.cantidad*0.16, 0);
-  const granTotal= subtSin + subtCon + ivaTotal;
-
-  const hayMixto  = sinIva.length > 0 && conIva.length > 0;
-  const descMonto = granTotal * (descuento / 100);
-  const totalFinal= granTotal - descMonto + envio;
-
-  const TW = 82;
-  const TX = W - MR - TW;
-  const tLX = TX + 4;
-  const tVX = TX + TW - 4;
-  const tLH = 7;
-
-  // ── Precalcular filas para dibujar el rect ANTES del texto ──
-  // Filas: subtotales + IVA + descuento? + envio? + separador + total
-  let numFilas = 0;
-  if(hayMixto)      numFilas += 2; else numFilas += 1; // subtotal(es)
-  numFilas += 1;                                        // IVA
-  if(descuento > 0) numFilas += 1;
-  if(envio > 0)     numFilas += 1;
-  const boxH  = 7 + numFilas * tLH + 3 + 10 + 4;      // padding + filas + sep + barra TOTAL + margen
-
-  let ty = y + 4;
-  // Si no cabe en la página, nueva página
-  if(ty + boxH > 272){ doc2.addPage(); ty = 15; }
-
-  // Dibujar fondo del bloque ahora que sabemos la altura exacta
-  doc2.setFillColor(248,248,248);
-  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.15);
-  doc2.rect(TX, ty, TW, boxH, "FD");
-
-  let tY = ty + 7;
-
-  // ── Filas de subtotales ──
-  if(hayMixto){
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
-    doc2.text("Subtotal sin IVA:", tLX, tY);
-    doc2.setTextColor(30,30,30);
-    doc2.text(fmt(subtSin), tVX, tY, {align:"right"}); tY += tLH;
-    doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80);
-    doc2.text("Subtotal con IVA:", tLX, tY);
-    doc2.setTextColor(30,30,30);
-    doc2.text(fmt(subtCon), tVX, tY, {align:"right"}); tY += tLH;
-  } else if(sinIva.length > 0){
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
-    doc2.text("Subtotal:", tLX, tY);
-    doc2.setTextColor(30,30,30);
-    doc2.text(fmt(subtSin), tVX, tY, {align:"right"}); tY += tLH;
-  } else {
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
-    doc2.text("Subtotal:", tLX, tY);
-    doc2.setTextColor(30,30,30);
-    doc2.text(fmt(subtCon), tVX, tY, {align:"right"}); tY += tLH;
-  }
-
-  // ── IVA ──
-  if(conIva.length > 0){
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
-    doc2.text("IVA (16%):", tLX, tY);
-    doc2.setTextColor(30,30,30);
-    doc2.text(fmt(ivaTotal), tVX, tY, {align:"right"}); tY += tLH;
-  } else {
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(80,80,80);
-    doc2.text("IVA:", tLX, tY);
-    doc2.setFont("helvetica","italic"); doc2.setTextColor(160,160,160);
-    doc2.text("$0.00", tVX, tY, {align:"right"}); tY += tLH;
-  }
-
-  // ── Descuento (si aplica) ──
-  if(descuento > 0){
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(22,163,74);
-    doc2.text("Descuento (" + descuento + "%):", tLX, tY);
-    doc2.setFont("helvetica","bold");
-    doc2.text("-" + fmt(descMonto), tVX, tY, {align:"right"}); tY += tLH;
-  }
-
-  // ── Envío (si aplica) — suma al total final ──
-  if(envio > 0){
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(37,99,235);
-    doc2.text("Envío:", tLX, tY);
-    doc2.setFont("helvetica","bold");
-    doc2.text("+" + fmt(envio), tVX, tY, {align:"right"}); tY += tLH;
-  }
-
-  // ── Línea divisora ──
-  tY += 1;
-  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.4);
-  doc2.line(TX + 2, tY, TX + TW - 2, tY); tY += 3;
-
-  // ── Barra TOTAL naranja — siempre pegada al fondo del rect ──
+  // Totales
+  const subtotal = items.reduce((s,it)=>s+it.precio*it.cantidad,0);
+  const finalY   = doc2.lastAutoTable.finalY + 6;
+  doc2.setFillColor(245,245,245);
+  doc2.rect(120, finalY-4, 75, 20, "F");
+  doc2.setFont("helvetica","normal"); doc2.setFontSize(9); doc2.setTextColor(80,80,80);
+  doc2.text("Subtotal:", 122, finalY+2);
+  doc2.text("IVA:", 122, finalY+8);
+  doc2.setFont("helvetica","bold"); doc2.setFontSize(10); doc2.setTextColor(40,40,40);
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+2, {align:"right"});
+  doc2.setFontSize(8); doc2.setFont("helvetica","normal"); doc2.setTextColor(100,100,100);
+  doc2.text("(Según tipo de producto — consultar factura)", 193, finalY+8, {align:"right"});
+  // Línea separadora
+  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.5);
+  doc2.line(120, finalY+10, 195, finalY+10);
   doc2.setFillColor(255,107,6);
-  doc2.rect(TX, ty + boxH - 10, TW, 10, "F");
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(11); doc2.setTextColor(255,255,255);
-  doc2.text("TOTAL:", tLX + 1, ty + boxH - 3);
-  doc2.text(fmt(totalFinal), tVX - 1, ty + boxH - 3, {align:"right"});
+  doc2.rect(120, finalY+11, 75, 9, "F");
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(11);
+  doc2.text("TOTAL:", 122, finalY+17.5);
+  doc2.text(new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(subtotal), 193, finalY+17.5, {align:"right"});
 
-  // Posición real donde terminó el bloque de totales
-  const totalesBottomY = ty + boxH;
-
-  // ════════════════════════════════════════════════════════════
-  // OBSERVACIONES
-  // ════════════════════════════════════════════════════════════
-  let afterContentY = totalesBottomY + 6;
-  if(nota && nota.trim()){
-    const notaLines = doc2.splitTextToSize(nota.trim(), CW - 8);
-    const notaH = 8 + notaLines.length * 4.5;
-    doc2.setFillColor(255,251,235);
-    doc2.setDrawColor(253,211,77); doc2.setLineWidth(0.2);
-    doc2.roundedRect(ML, afterContentY, CW, notaH, 2, 2, "FD");
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(180,120,0);
-    doc2.text("OBSERVACIONES:", ML + 4, afterContentY + 5);
-    doc2.setFont("helvetica","normal"); doc2.setTextColor(60,60,60);
-    doc2.text(notaLines, ML + 4, afterContentY + 10);
-    afterContentY += notaH + 6;
+  // Notas
+  if(nota){
+    const ny = finalY+28;
+    doc2.setTextColor(60,60,60); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
+    doc2.text("OBSERVACIONES:", M, ny);
+    doc2.setFont("helvetica","normal");
+    const lines = doc2.splitTextToSize(nota, W-M*2-5);
+    doc2.text(lines, M, ny+5);
   }
 
-  // ════════════════════════════════════════════════════════════
-  // DATOS BANCARIOS — siempre debajo de todo el contenido
-  // ════════════════════════════════════════════════════════════
-  let by2 = afterContentY + 4;
-  // Si se sale de la página, nueva página
-  if(by2 + 30 > 272){ doc2.addPage(); by2 = 15; }
-
-  // Bloque bancario — ancho completo, 2 columnas
-  doc2.setFillColor(235,244,255);
-  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.15);
-  doc2.rect(ML, by2, CW, 24, "FD");
-
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5); doc2.setTextColor(0,80,180);
-  doc2.text("DATOS PARA DEPOSITO / TRANSFERENCIA", ML + 4, by2 + 5);
-  doc2.setDrawColor(180,210,240); doc2.setLineWidth(0.15);
-  doc2.line(ML + 3, by2 + 6.5, ML + CW - 3, by2 + 6.5);
-
-  const bC1 = ML + 4, bC2 = ML + 20, bC3 = ML + CW/2 + 4, bC4 = ML + CW/2 + 18;
-
-  // Fila 1: Banco | Titular
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
-  doc2.text("Banco:", bC1, by2 + 12);
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(20,20,20);
-  doc2.text("BBVA", bC2, by2 + 12);
-
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
-  doc2.text("Titular:", bC3, by2 + 12);
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5); doc2.setTextColor(20,20,20);
-  doc2.text("Comercial Llantera Tapatia SA de CV", bC4, by2 + 12);
-
-  // Fila 2: Cuenta | CLABE — ambas en negritas
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
-  doc2.text("No. Cuenta:", bC1, by2 + 19);
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(20,20,20);
-  doc2.text("0154483138", bC2, by2 + 19);
-
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(100,100,100);
-  doc2.text("CLABE:", bC3, by2 + 19);
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(20,20,20);
-  doc2.text("012320001544831389", bC4, by2 + 19);
-
-  // ════════════════════════════════════════════════════════════
-  // FOOTER
-  // ════════════════════════════════════════════════════════════
-  const FY = 282;
+  // Footer
+  const py = 282;
   doc2.setFillColor(255,107,6);
-  doc2.rect(0, FY, W, 15, "F");
-  doc2.setFont("helvetica","bold"); doc2.setFontSize(7); doc2.setTextColor(255,255,255);
-  doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.", W/2, FY + 4.5, {align:"center"});
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(6.5);
-  doc2.text("Esta cotizacion es informativa y no constituye un pedido, factura ni compromiso de entrega.", W/2, FY + 9, {align:"center"});
-  doc2.text("Grupo Tapatia  |  tapatia.app  |  " + fecha, W/2, FY + 13, {align:"center"});
+  doc2.rect(0, py, W, 15, "F");
+  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5);
+  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.", W/2, py+5, {align:"center"});
+  doc2.text("Los precios están sujetos a cambios sin previo aviso. Precios antes de IVA salvo productos agrícolas.", W/2, py+9, {align:"center"});
+  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`, W/2, py+13, {align:"center"});
 
-  doc2.save("Cotizacion_" + folio + ".pdf");
+  doc2.save(`Cotizacion_${folio}.pdf`);
 }
+
 // ── Carrito de cotización ─────────────────────────────────────
 function CartPanel({cart, setCart, session, db, onClose, mob}){
   const isVend = session?.lista==="VENDEDOR" || session?.rol==="admin" || session?.rol==="superadmin";
   const [nota, setNota] = useState("");
-  const [vigencia, setVigencia] = useState("7 días naturales");
-  const [descuento, setDescuento] = useState("");   // % descuento adicional
-  const [envio, setEnvio] = useState("");            // costo envío manual
+  const [vigencia, setVigencia] = useState("15 días naturales");
   const [generating, setGenerating] = useState(false);
   const [folioMsg, setFolioMsg] = useState("");
-
-  // ── Campo cliente dinámico ─────────────────────────────────
-  // Cliente: si es vendedor/admin → editable con opción "Público en general"
-  //          si es cliente → automático, no editable
-  const clienteAuto = session?.empresa?.trim() || session?.nombre?.trim() || "Público en general";
-  const [clienteManual, setClienteManual]   = useState("");
-  const [esPublico,     setEsPublico]       = useState(false);
-  // Valor final que va al PDF
-  const clienteLabel = isVend
-    ? (esPublico ? "Público en general" : (clienteManual.trim() || "Público en general"))
-    : clienteAuto;
 
   const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad, 0);
   const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(n);
@@ -632,21 +394,11 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
     try{
       const folio=await getNextFolio();
       setFolioMsg(`📄 ${folio} — generando PDF...`);
-      const pctDesc = parseFloat(descuento)||0;
-      const costoEnvio = parseFloat(envio)||0;
-      await generarPDF({folio,session,items:cart,nota,vigencia,clienteLabel,descuento:pctDesc,envio:costoEnvio});
-      const subtotalGuardar = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
-      const ivaGuardar      = cart.filter(it=>String(it.iva||"NO").toUpperCase()==="SI").reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
-      const pctDescG  = parseFloat(descuento)||0;
-      const envioG    = parseFloat(envio)||0;
-      const descMontoG= (subtotalGuardar+ivaGuardar) * pctDescG / 100;
-      const totalFinalG = subtotalGuardar + ivaGuardar - descMontoG + envioG;
+      await generarPDF({folio,session,items:cart,nota,vigencia});
       await setDoc(doc(db,"cotizaciones",folio),{
         folio,usuario:session.usuario,nombre:session.nombre,
-        empresa:session.empresa||"",cliente:clienteLabel,
-        items:cart,subtotal:totalFinalG,
-        iva:ivaGuardar,descuento:pctDescG,envio:envioG,
-        nota,vigencia,fecha:new Date().toISOString(),
+        empresa:session.empresa||"",items:cart,
+        subtotal,nota,vigencia,fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
       setTimeout(()=>{setCart([]);onClose();},2000);
@@ -680,6 +432,7 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
           )}
           {cart.map((it,i)=>(
             <div key={i} style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:8,padding:"12px 14px",marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.05)"}}>
+              {/* Nombre y eliminar */}
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
                 <div style={{flex:1,marginRight:8}}>
                   <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{it.codigo}</div>
@@ -688,7 +441,9 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                 <button onClick={()=>remove(i)} style={{background:"#fee2e2",border:"none",color:"#dc2626",width:26,height:26,borderRadius:"50%",cursor:"pointer",fontSize:13,fontWeight:700,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
               </div>
 
+              {/* Controles */}
               <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                {/* Cantidad */}
                 <div style={{display:"flex",alignItems:"center",gap:4}}>
                   <span style={{fontSize:11,color:GRL,marginRight:2}}>Cant:</span>
                   <div style={{display:"flex",alignItems:"center",border:"1px solid #d1d5db",borderRadius:6,overflow:"hidden"}}>
@@ -701,6 +456,7 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                   </div>
                 </div>
 
+                {/* Selector de precio para vendedor/admin */}
                 {isVend&&(
                   <select value={it.tipoPrecio} onChange={e=>updPrecio(i,e.target.value)}
                     style={{padding:"5px 8px",border:"1px solid #d1d5db",borderRadius:6,fontSize:11,color:"#374151",outline:"none",background:"#fff",cursor:"pointer"}}>
@@ -710,6 +466,7 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                   </select>
                 )}
 
+                {/* Precio e importe */}
                 <div style={{marginLeft:"auto",textAlign:"right"}}>
                   <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#374151"}}>{money2(it.precio)}</strong></div>
                   <div style={{fontSize:14,fontWeight:700,color:OR}}>{money2(it.precio*it.cantidad)}</div>
@@ -722,43 +479,12 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
         {/* ── Footer ── */}
         {cart.length>0&&(
           <div style={{borderTop:"2px solid #e5e7eb",padding:"14px 16px",background:"#fff",flexShrink:0}}>
-
-            {/* ── Campo CLIENTE ── */}
-            <div style={{marginBottom:12,background:"#f9f9f9",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 12px"}}>
-              <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:6,fontWeight:700}}>CLIENTE EN LA COTIZACIÓN</div>
-              {isVend ? (
-                /* Vendedor / Admin: editable */
-                <div>
-                  <input
-                    value={esPublico?"Público en general":clienteManual}
-                    onChange={e=>{ setClienteManual(e.target.value); setEsPublico(false); }}
-                    disabled={esPublico}
-                    placeholder="Nombre o razón social del cliente..."
-                    style={{width:"100%",padding:"7px 10px",border:"1px solid #d1d5db",borderRadius:6,
-                      fontSize:12,outline:"none",boxSizing:"border-box",marginBottom:6,
-                      background:esPublico?"#f3f4f6":"#fff",color:esPublico?GRL:"#1a1a1a"}}/>
-                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:11,color:GRL}}>
-                    <input type="checkbox" checked={esPublico} onChange={e=>{setEsPublico(e.target.checked);if(e.target.checked)setClienteManual("");}}
-                      style={{width:14,height:14,accentColor:OR,cursor:"pointer"}}/>
-                    Público en general
-                  </label>
-                </div>
-              ):(
-                /* Cliente: solo lectura */
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <span style={{fontSize:13,fontWeight:600,color:"#1a1a1a"}}>{clienteAuto}</span>
-                  <span style={{fontSize:10,color:GRL,background:"#f3f4f6",padding:"2px 7px",borderRadius:3}}>automático</span>
-                </div>
-              )}
-            </div>
-
-            {/* Vigencia y observaciones */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:8}}>
+            {/* Vigencia y notas */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:10}}>
               <div>
                 <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
                 <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
                   style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",background:"#fff"}}>
-                  <option>7 días naturales</option>
                   <option>15 días naturales</option>
                   <option>30 días naturales</option>
                   <option>Sujeto a disponibilidad</option>
@@ -771,62 +497,26 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
                   style={{width:"100%",padding:"7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
               </div>
             </div>
-            {/* Descuento y Envío */}
-            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"0 10px",marginBottom:8}}>
-              <div>
-                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>DESCUENTO ADICIONAL (%)</div>
-                <div style={{position:"relative"}}>
-                  <input type="number" min="0" max="100" step="0.5"
-                    value={descuento} onChange={e=>setDescuento(e.target.value)}
-                    placeholder="0"
-                    style={{width:"100%",padding:"7px 28px 7px 9px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
-                  <span style={{position:"absolute",right:9,top:"50%",transform:"translateY(-50%)",color:GRL,fontSize:12,fontWeight:700}}>%</span>
-                </div>
-              </div>
-              <div>
-                <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>COSTO DE ENVÍO ($)</div>
-                <div style={{position:"relative"}}>
-                  <span style={{position:"absolute",left:9,top:"50%",transform:"translateY(-50%)",color:GRL,fontSize:12}}>$</span>
-                  <input type="number" min="0" step="1"
-                    value={envio} onChange={e=>setEnvio(e.target.value)}
-                    placeholder="0"
-                    style={{width:"100%",padding:"7px 9px 7px 22px",border:"1px solid #d1d5db",borderRadius:6,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
-                </div>
-              </div>
-            </div>
 
+            {/* Resumen total */}
             <div style={{background:"#f9f9f9",border:"1px solid #e5e7eb",borderRadius:8,padding:"10px 14px",marginBottom:12}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:4}}>
                 <span style={{fontSize:12,color:GRL}}>{cart.length} producto{cart.length!==1?"s":""}</span>
                 <span style={{fontSize:12,color:GRL}}>{cart.reduce((s,it)=>s+it.cantidad,0)} piezas total</span>
               </div>
-              {/* Subtotal base */}
-              <div style={{display:"flex",justifyContent:"space-between",borderTop:"1px solid #e5e7eb",paddingTop:6,marginTop:4}}>
-                <span style={{fontSize:12,color:GRL}}>Subtotal (antes IVA):</span>
-                <span style={{fontSize:12,color:"#1a1a1a",fontWeight:600}}>{money2(subtotal)}</span>
-              </div>
-              {/* Descuento */}
-              {parseFloat(descuento)>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
-                <span style={{fontSize:12,color:"#16a34a"}}>Descuento ({descuento}%):</span>
-                <span style={{fontSize:12,color:"#16a34a",fontWeight:600}}>-{money2(subtotal*(parseFloat(descuento)/100))}</span>
-              </div>}
-              {/* Envío */}
-              {parseFloat(envio)>0&&<div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
-                <span style={{fontSize:12,color:"#2563eb"}}>Envío:</span>
-                <span style={{fontSize:12,color:"#2563eb",fontWeight:600}}>+{money2(parseFloat(envio))}</span>
-              </div>}
-              {/* Total estimado */}
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #e5e7eb",paddingTop:8,marginTop:6}}>
-                <span style={{fontSize:13,fontWeight:700,color:"#1a1a1a"}}>TOTAL ESTIMADO:</span>
-                <span style={{fontSize:18,fontWeight:800,color:OR}}>{money2(subtotal-(subtotal*(parseFloat(descuento||0)/100))+(parseFloat(envio||0)))}</span>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",borderTop:"1px solid #e5e7eb",paddingTop:8,marginTop:4}}>
+                <span style={{fontSize:14,fontWeight:700,color:"#1a1a1a"}}>SUBTOTAL ANTES DE IVA:</span>
+                <span style={{fontSize:20,fontWeight:800,color:OR}}>{money2(subtotal)}</span>
               </div>
             </div>
 
+            {/* Mensaje de folio */}
             {folioMsg&&<div style={{fontSize:11,marginBottom:10,padding:"8px 12px",borderRadius:6,
               background:folioMsg.startsWith("✅")?"#f0fdf4":folioMsg.startsWith("❌")?"#fef2f2":"#fffbeb",
               color:folioMsg.startsWith("✅")?"#16a34a":folioMsg.startsWith("❌")?"#dc2626":"#d97706",
               border:`1px solid ${folioMsg.startsWith("✅")?"#bbf7d0":folioMsg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{folioMsg}</div>}
 
+            {/* Botones */}
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{if(window.confirm("¿Limpiar el carrito?"))setCart([]);}}
                 style={{flex:1,padding:"11px",background:"#f3f4f6",color:"#374151",border:"1px solid #d1d5db",borderRadius:6,cursor:"pointer",fontWeight:600,fontSize:12}}>
@@ -846,76 +536,6 @@ function CartPanel({cart, setCart, session, db, onClose, mob}){
   );
 }
 
-// ── Botón flotante del carrito — siempre visible ──────────────
-function CartFAB({cart, onClick, mob}){
-  const count = cart.length;
-  const subtotal = cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
-  const money2 = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:0}).format(n);
-
-  return (
-    <button
-      onClick={onClick}
-      title="Ver carrito de cotización"
-      style={{
-        position:"fixed",
-        bottom: mob ? 16 : 24,
-        right:  mob ? 16 : 24,
-        zIndex: 1500,
-        background: count > 0 ? OR : "#fff",
-        color: count > 0 ? "#fff" : GRL,
-        border: count > 0 ? "none" : "2px solid "+BD,
-        borderRadius: mob ? "50%" : "50px",
-        width:  count === 0 || mob ? (mob ? 52 : 52) : "auto",
-        height: count === 0 || mob ? (mob ? 52 : 52) : "auto",
-        padding: count > 0 && !mob ? "12px 20px" : 0,
-        cursor: "pointer",
-        fontWeight: 700,
-        fontSize: 13,
-        boxShadow: count > 0
-          ? "0 4px 20px rgba(255,107,6,0.45)"
-          : "0 2px 12px rgba(0,0,0,0.12)",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        gap: 8,
-        transition: "all 0.2s ease",
-      }}
-    >
-      {/* Ícono carrito */}
-      <span style={{fontSize: mob ? 22 : (count > 0 ? 18 : 22), lineHeight:1}}>🛒</span>
-
-      {/* Texto solo en desktop cuando hay items */}
-      {count > 0 && !mob && (
-        <span style={{fontSize:13}}>
-          Cotización · {money2(subtotal)}
-        </span>
-      )}
-
-      {/* Burbuja contador — siempre que haya items */}
-      {count > 0 && (
-        <span style={{
-          background:"#fff",
-          color: OR,
-          borderRadius:"50%",
-          width: mob ? 20 : 22,
-          height: mob ? 20 : 22,
-          display:"flex",
-          alignItems:"center",
-          justifyContent:"center",
-          fontSize: mob ? 10 : 11,
-          fontWeight: 800,
-          position: mob ? "absolute" : "relative",
-          top: mob ? -6 : "auto",
-          right: mob ? -6 : "auto",
-          boxShadow: mob ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
-          border: mob ? "2px solid "+OR : "none",
-          flexShrink: 0,
-        }}>{count}</span>
-      )}
-    </button>
-  );
-}
-
 // ── Celda de contraseña con ver/editar ───────────────────────
 function PassCell({uid, db, hashPassword}){
   const [show,   setShow]   = useState(false);
@@ -923,7 +543,7 @@ function PassCell({uid, db, hashPassword}){
   const [newPass,setNewPass] = useState("");
   const [saving, setSaving]  = useState(false);
   const [msg,    setMsg]     = useState("");
-  const [plain,  setPlain]   = useState("");
+  const [plain,  setPlain]   = useState(""); // contraseña en texto plano si se guardó en esta sesión
 
   async function guardar(){
     if(!newPass.trim()){ setMsg("❌ Escribe una contraseña"); return; }
@@ -993,6 +613,7 @@ function ChangePassword({session,db,hashPassword,checkPassword}){
       if(!ok){setMsg("❌ La contraseña actual es incorrecta.");setLoading(false);return;}
       const hash=await hashPassword(nueva);
       await setDoc(doc(db,"usuarios",adminDoc.id),{password:hash,actualizado:new Date().toISOString()},{merge:true});
+      // Actualizar sesión local
       const updated={...session,password:hash};
       localStorage.setItem("gt_session",JSON.stringify(updated));
       setMsg("✅ Contraseña cambiada exitosamente.");
@@ -1040,6 +661,7 @@ function CreateAdmin({session,db,hashPassword}){
     if(form.password.length<4){setMsg("❌ Contraseña muy corta (mínimo 4 caracteres).");return;}
     setLoading(true);setMsg("");
     try {
+      // Verificar que no exista
       const snap=await getDocs(collection(db,"usuarios"));
       const existe=snap.docs.find(d=>d.data().usuario===form.usuario.trim());
       if(existe){setMsg("❌ Ya existe un usuario con ese nombre. Elige otro.");setLoading(false);return;}
@@ -1099,7 +721,7 @@ function CreateAdmin({session,db,hashPassword}){
 // ════════════════════════════════════════════════════════════
 export default function App(){
   const [session,  setSession]  = useState(()=>{ try{const s=localStorage.getItem("gt_session");return s?JSON.parse(s):null;}catch(e){return null;} });
-  const [view,     setView]     = useState(()=>{ try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return u.rol==="admin"||u.rol==="superadmin"?"admin":"client";}}catch(e){}return "login"; });
+  const [view,     setView]     = useState(()=>{ try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return u.rol==="admin"?"admin":"client";}}catch(e){}return "login"; });
   const [tab,      setTab]      = useState("products");
   const [users,    setUsers]    = useState([]);
   const [products, setProducts] = useState([]);
@@ -1110,9 +732,6 @@ export default function App(){
   const [page,     setPage]     = useState(0);
   const [cart,     setCart]     = useState([]);
   const [cartOpen, setCartOpen] = useState(false);
-  const [quotes,   setQuotes]   = useState([]);
-  const [quotesLoad,setQuotesLoad]=useState(false);
-  const [quoteDetail,setQuoteDetail]=useState(null);
   const PS = 50;
   const [lu,setLu]=useState(""); const [lp,setLp]=useState(""); const [lerr,setLerr]=useState("");
   const [loginLoad,setLoginLoad]=useState(false);
@@ -1125,47 +744,43 @@ export default function App(){
 
   useEffect(()=>{const h=()=>setMob(window.innerWidth<768);window.addEventListener("resize",h);return()=>window.removeEventListener("resize",h);},[]);
 
+  // Debounce buscador
   useEffect(()=>{
     if(dbRef.current)clearTimeout(dbRef.current);
     dbRef.current=setTimeout(()=>{setDs(search);setPage(0);},300);
     return()=>{if(dbRef.current)clearTimeout(dbRef.current);};
   },[search]);
 
+  // Cargar productos al entrar
   useEffect(()=>{
     if(session) loadProducts();
-    if(session?.rol==="admin"||session?.rol==="superadmin") loadUsers();
+    if(session?.rol==="admin") loadUsers();
   },[session]);
 
+  // ── Cargar productos — NUNCA pisa estado si hay error ──────
   async function loadProducts(){
     setProdLoad(true);
     const data = await fbGetProductos();
-    if(data !== null) setProducts(data);
+    if(data !== null) setProducts(data); // solo actualiza si no hubo error
     else console.warn("No se pudieron cargar productos — manteniendo estado anterior");
     setProdLoad(false);
   }
 
+  // ── Cargar usuarios — NUNCA pisa estado si hay error ──────
   async function loadUsers(){
     setUserLoad(true);
     const data = await fbGetUsuarios();
-    if(data !== null){ setUsers(data); }
-    else { console.warn("No se pudieron cargar usuarios — manteniendo estado anterior"); }
+    if(data !== null){
+      // Mostrar todos los usuarios incluyendo otros admins
+      // Solo ocultar al admin actual para no confundir
+      setUsers(data);
+    } else {
+      console.warn("No se pudieron cargar usuarios — manteniendo estado anterior");
+    }
     setUserLoad(false);
   }
 
-  // ── Cargar cotizaciones ────────────────────────────────────
-  async function loadQuotes(){
-    setQuotesLoad(true);
-    try {
-      const snap = await getDocs(collection(db,"cotizaciones"));
-      const isAdmin = session?.rol==="admin"||session?.rol==="superadmin";
-      let qdata = snap.docs.map(d=>({id:d.id,...d.data()}));
-      if(!isAdmin) qdata = qdata.filter(q=>q.usuario===session?.usuario);
-      qdata.sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
-      setQuotes(qdata);
-    } catch(e){ console.error("Error cotizaciones:",e); }
-    setQuotesLoad(false);
-  }
-
+  // ── Login ──────────────────────────────────────────────────
   async function doLogin(){
     setLerr(""); setLoginLoad(true);
     try {
@@ -1191,6 +806,7 @@ export default function App(){
     localStorage.removeItem("gt_session");
   }
 
+  // ── Subir CSV ──────────────────────────────────────────────
   async function handleFile(e){
     const file=e.target.files[0]; if(!file)return; e.target.value="";
     if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
@@ -1210,12 +826,12 @@ export default function App(){
           publico:     Number(r.PUBLICO||r["PÚBLICO"]||0),
           distribuidor:Number(r.DISTRIBUIDOR||0),
           asociado:    Number(r.ASOCIADO||0),
-          iva:         String(r.IVA||"NO").trim().toUpperCase()==="SI"?"SI":"NO",
           actualizado: new Date().toISOString(),
-        })).filter(p=>p.codigo);
+        })).filter(p=>p.codigo); // solo productos con código válido
 
         if(mapped.length===0){setMsg("❌ No hay productos válidos en el archivo.");return;}
 
+        // 1. Respaldar versión anterior
         setMsg("💾 Respaldando versión anterior...");
         const oldSnap=await getDocs(collection(db,"productos"));
         if(oldSnap.docs.length>0){
@@ -1225,6 +841,7 @@ export default function App(){
           await bkBatch.commit();
         }
 
+        // 2. Borrar productos anteriores
         setMsg("🗑️ Eliminando versión anterior...");
         if(oldSnap.docs.length>0){
           const delBatch=writeBatch(db);
@@ -1232,6 +849,7 @@ export default function App(){
           await delBatch.commit();
         }
 
+        // 3. Insertar nuevos en lotes de 400
         const chunk=400;
         for(let i=0;i<mapped.length;i+=chunk){
           const batch=writeBatch(db);
@@ -1242,12 +860,14 @@ export default function App(){
           setMsg(`⏳ ${Math.min(i+chunk,mapped.length)} / ${mapped.length} productos guardados...`);
         }
 
+        // 4. Verificar que se guardaron
         const verify=await getDocs(collection(db,"productos"));
         if(verify.size===0){
           setMsg("❌ ERROR CRÍTICO: Los productos no se guardaron correctamente. Revisa Firebase.");
           return;
         }
 
+        // 5. Bitácora
         await setDoc(doc(db,"bitacora",`carga_${Date.now()}`),{
           tipo:"carga_productos",
           por:session.nombre,
@@ -1255,40 +875,8 @@ export default function App(){
           fecha:new Date().toISOString(),
         });
 
-        // ── Limpiar respaldos viejos — mantener solo los 3 más recientes ────────────
-        try {
-          const MAX_RESPALDOS = 3;
-          const bkIndexRef = doc(db,"_meta","respaldos_index");
-          const bkIndexSnap = await getDoc(bkIndexRef);
-          let bkList = bkIndexSnap.exists() ? (bkIndexSnap.data().lista||[]) : [];
-
-          // Registrar el respaldo recién creado
-          if(oldSnap.docs.length > 0) bkList.push(`respaldo_${ts}`);
-
-          // Si hay más de 3, borrar los más viejos
-          if(bkList.length > MAX_RESPALDOS){
-            const aEliminar = bkList.slice(0, bkList.length - MAX_RESPALDOS);
-            for(const colName of aEliminar){
-              try {
-                const oldBkSnap = await getDocs(collection(db, colName));
-                if(!oldBkSnap.empty){
-                  const docs = oldBkSnap.docs;
-                  for(let ci=0; ci<docs.length; ci+=400){
-                    const delB = writeBatch(db);
-                    docs.slice(ci,ci+400).forEach(d=>delB.delete(d.ref));
-                    await delB.commit();
-                  }
-                }
-              } catch(bkErr){ console.warn("No se pudo borrar:",colName,bkErr); }
-            }
-            bkList = bkList.slice(bkList.length - MAX_RESPALDOS);
-          }
-
-          await setDoc(bkIndexRef,{lista:bkList,actualizado:new Date().toISOString()});
-        } catch(bkErr){ console.warn("Error respaldos:",bkErr); }
-
         await loadProducts();
-        setMsg(`✅ ${mapped.length} productos guardados. Se conservan los últimos 3 respaldos.`);
+        setMsg(`✅ ${mapped.length} productos guardados y verificados en Firebase.`);
       } catch(err){
         setMsg("❌ ERROR: "+err.message);
         console.error("Error al subir CSV:",err);
@@ -1297,9 +885,11 @@ export default function App(){
     reader.readAsText(file,"UTF-8");
   }
 
+  // ── Guardar usuario ────────────────────────────────────────
   async function saveClient(form){
     setSaving(true);
     try {
+      // Validar campos
       if(!form.nombre?.trim()||!form.usuario?.trim()){
         alert("Nombre y usuario son obligatorios.");setSaving(false);return;
       }
@@ -1307,6 +897,7 @@ export default function App(){
         alert("La contraseña es obligatoria para usuarios nuevos.");setSaving(false);return;
       }
 
+      // Verificar duplicado solo en creación
       if(!form.id){
         const existe=users.find(u=>u.usuario.trim()===form.usuario.trim());
         if(existe){alert("Ya existe un usuario con ese nombre. Elige otro.");setSaving(false);return;}
@@ -1325,13 +916,16 @@ export default function App(){
       if(!form.id) data.creado_en=new Date().toISOString();
       if(form.password?.trim()) data.password=await hashPassword(form.password.trim());
 
+      // Guardar con merge:true para NO borrar campos existentes
       await setDoc(doc(db,"usuarios",id),data,{merge:true});
 
+      // Verificar que se guardó
       const verify=await getDoc(doc(db,"usuarios",id));
       if(!verify.exists()){
         alert("❌ ERROR: El usuario no se guardó. Intenta de nuevo.");setSaving(false);return;
       }
 
+      // Bitácora
       await setDoc(doc(db,"bitacora",`u_${Date.now()}`),{
         tipo:form.id?"edicion_usuario":"nuevo_usuario",
         usuario:form.usuario.trim(),
@@ -1348,21 +942,26 @@ export default function App(){
     setSaving(false);
   }
 
+  // ── Toggle estatus ─────────────────────────────────────────
   async function toggleEstatus(id,est){
     try {
+      // Solo actualizar el campo estatus, no tocar nada más
       await setDoc(doc(db,"usuarios",id),{
         estatus: est==="activo"?"inactivo":"activo",
         actualizado: new Date().toISOString()
       },{merge:true});
+      // Actualizar estado local sin recargar todo
       setUsers(prev=>prev.map(u=>u.id===id?{...u,estatus:est==="activo"?"inactivo":"activo"}:u));
     } catch(err){
       alert("❌ Error al cambiar estatus: "+err.message);
     }
   }
 
+  // ── Eliminar usuario ───────────────────────────────────────
   async function deleteClient(id,nombre,rol){
-    if(rol==="admin"||rol==="superadmin"){
-      const admins=users.filter(u=>u.rol==="admin"||u.rol==="superadmin");
+    // Proteger: no eliminar si es el último admin
+    if(rol==="admin"){
+      const admins=users.filter(u=>u.rol==="admin");
       if(admins.length<=1){
         alert("❌ No puedes eliminar el único administrador del sistema.");
         return;
@@ -1384,37 +983,13 @@ export default function App(){
     }
   }
 
-  // ── Agregar al carrito ─────────────────────────────────────
-  function addToCart(p){
-    const rol2   = session?.rol||"client";
-    const lista2 = session?.lista||"PUBLICO";
-    const isVend2 = lista2==="VENDEDOR"||rol2==="admin"||rol2==="superadmin";
-    const precioVal = isVend2 ? (Number(p.publico)||0) : getPrecio(p,lista2);
-    const tipoPrecio = isVend2 ? "publico" : lista2.toLowerCase();
-
-    setCart(prev=>{
-      const idx=prev.findIndex(it=>it.codigo===String(p.codigo));
-      if(idx>=0){
-        return prev.map((it,i)=>i===idx?{...it,cantidad:it.cantidad+1}:it);
-      }
-      return [...prev,{
-        codigo:      String(p.codigo||""),
-        descripcion: String(p.descripcion||""),
-        precio:      precioVal,
-        tipoPrecio,
-        cantidad:    1,
-        iva:         String(p.iva||"NO").trim().toUpperCase()==="SI"?"SI":"NO",
-        _publico:     Number(p.publico)||0,
-        _distribuidor:Number(p.distribuidor)||0,
-        _asociado:    Number(p.asociado)||0,
-      }];
-    });
-  }
-
   // ── Filtrado ───────────────────────────────────────────────
+  // Filtrado usa ds (debounced) — buscador SIN cambios
+  // Solo se agrega ordenamiento por stock al final
   const filtered=useMemo(()=>{
     const q=ds.trim();
     const results = q ? products.filter(p=>smartMatch(q,p)) : [...products];
+    // Ordenar por stock total: mayor a menor, 0 al final
     return results.sort((a,b)=>{
       const ta=calcTotal(a), tb=calcTotal(b);
       if(ta===0 && tb===0) return 0;
@@ -1471,7 +1046,7 @@ export default function App(){
   const Hdr=session&&<div style={{background:OR,borderBottom:"2px solid #e05500",padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}}>
     <div style={{display:"flex",alignItems:"center",gap:12}}>
       <Logo h={mob?32:44}/>
-      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{session.rol==="admin"||session.rol==="superadmin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
+      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{session.rol==="admin"?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10}}>
       {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#fff",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{session.empresa}</div>}</div>}
@@ -1500,16 +1075,21 @@ export default function App(){
   // ════ ADMIN ════════════════════════════════════════════════
   if(view==="admin") return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
     {Hdr}{modal&&<ClientModal/>}
-    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
-    {/* FAB carrito — siempre visible en admin */}
-    {!cartOpen&&<CartFAB cart={cart} onClick={()=>setCartOpen(true)} mob={mob}/>}
-
+    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)}/>}
+    {cart.length>0&&!cartOpen&&(
+      <button onClick={()=>setCartOpen(true)} style={{position:"fixed",bottom:24,right:24,zIndex:1000,
+        background:OR,color:"#fff",border:"none",borderRadius:"50px",padding:"12px 20px",
+        cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 4px 16px rgba(255,107,6,0.5)",
+        display:"flex",alignItems:"center",gap:8}}>
+        🧾 <span>Cotización</span>
+        <span style={{background:"#fff",color:OR,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800}}>{cart.length}</span>
+      </button>
+    )}
     <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
       {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],
-        ["quotes","📋 COTIZACIONES"],
         ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
         .map(([k,l])=>(
-        <button key={k} onClick={()=>{setTab(k);if(k==="quotes")loadQuotes();}} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
+        <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
           color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",
           cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
       ))}
@@ -1536,7 +1116,7 @@ export default function App(){
         {prodLoad&&<div style={{textAlign:"center",padding:20,color:GRL}}>Cargando productos...</div>}
         {!prodLoad&&<div style={{overflowX:"auto",border:"1px solid "+BD,borderRadius:6,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-            <thead><tr style={{background:"#f0f0f0"}}>
+                          <thead><tr style={{background:"#f0f0f0"}}>
               <th style={{padding:"8px 10px",textAlign:"left",color:OR,fontWeight:700,whiteSpace:"nowrap"}}>CÓDIGO</th>
               <th style={{padding:"8px 10px",textAlign:"left",color:OR,fontWeight:700}}>DESCRIPCIÓN</th>
               <th style={{padding:"8px 6px",textAlign:"right",color:OR,fontWeight:700}}>STOCK</th>
@@ -1581,21 +1161,21 @@ export default function App(){
           </div>
         </div>
         {mob?(
-          <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"||u.rol==="superadmin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"||u.rol==="superadmin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
               <div>
-                <div style={{fontWeight:700,fontSize:13}}>{u.nombre}{(u.rol==="admin"||u.rol==="superadmin")&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>{u.rol==="superadmin"?"SUPERADMIN":"ADMIN"}</span>}</div>
+                <div style={{fontWeight:700,fontSize:13}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</div>
                 {u.empresa&&<div style={{color:GRL,fontSize:11}}>{u.empresa}</div>}
               </div>
               <Badge val={u.estatus}/>
             </div>
             <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-              <Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.lista}/>
+              <Badge val={u.rol==="admin"?"admin":u.lista}/>
               <span style={{color:GRL,fontSize:11,fontFamily:"monospace"}}>@{u.usuario}</span>
             </div>
             <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
-              {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
+              {u.rol!=="admin"&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
+              {u.rol!=="admin"&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
               {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
             </div>
           </div>)}</div>
@@ -1603,17 +1183,18 @@ export default function App(){
           <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
               <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","CONTRASEÑA","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
-              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:(u.rol==="admin"||u.rol==="superadmin")?"#eff6ff":i%2===0?CD:"#fafafa"}}>
-                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{(u.rol==="admin"||u.rol==="superadmin")&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>{u.rol==="superadmin"?"SUPERADMIN":"ADMIN"}</span>}</td>
+              <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:u.rol==="admin"?"#eff6ff":i%2===0?CD:"#fafafa"}}>
+                <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
                 <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                 <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
                 <td style={{padding:"9px 14px"}}>
-                  {(canDo(session,"config") || (u.rol!=="admin"&&u.rol!=="superadmin"))
+                  {/* Solo superadmin ve contraseñas de admins, admin normal solo ve de clientes */}
+                  {(canDo(session,"config") || u.rol!=="admin") 
                     ? <PassCell uid={u.id} db={db} hashPassword={hashPassword}/>
                     : <span style={{color:"#bbb",fontSize:11}}>—</span>}
                 </td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.rol}/></td>
-                <td style={{padding:"9px 14px"}}>{(u.rol==="admin"||u.rol==="superadmin")?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
+                <td style={{padding:"9px 14px"}}>{u.rol==="admin"||u.rol==="superadmin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                 <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                 <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
                   {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
@@ -1628,14 +1209,17 @@ export default function App(){
       </div>}
 
       {tab==="settings"&&<div style={{maxWidth:520}}>
+        {/* Cambiar contraseña */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>🔑 CAMBIAR MI CONTRASEÑA</div>
           <ChangePassword session={session} db={db} hashPassword={hashPassword} checkPassword={checkPassword}/>
         </div>
+        {/* Crear admin */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>👤 CREAR USUARIO ADMINISTRADOR</div>
           <CreateAdmin session={session} db={db} hashPassword={hashPassword}/>
         </div>
+        {/* Info sistema */}
         <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
           <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:12}}>ℹ️ INFORMACIÓN DEL SISTEMA</div>
           <div style={{color:GRL,fontSize:12,lineHeight:2}}>
@@ -1651,153 +1235,29 @@ export default function App(){
           </div>
         </div>
       </div>}
-
-      {tab==="quotes"&&<div>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-          <div>
-            <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>Historial de Cotizaciones</span>
-            {(session?.rol==="admin"||session?.rol==="superadmin")&&
-              <span style={{color:GRL,fontSize:11,marginLeft:10}}>— todas los usuarios</span>}
-          </div>
-          <button onClick={loadQuotes} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"8px 14px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ RECARGAR</button>
-        </div>
-        {quotesLoad&&<div style={{textAlign:"center",padding:30,color:GRL}}>Cargando cotizaciones...</div>}
-        {!quotesLoad&&quotes.length===0&&(
-          <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
-            <div style={{fontSize:36,marginBottom:10}}>📋</div>
-            <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Sin cotizaciones aún</div>
-            <div style={{fontSize:12}}>Las cotizaciones generadas aparecerán aquí</div>
-          </div>
-        )}
-        {!quotesLoad&&quotes.length>0&&(
-          mob?(
-            <div>{quotes.map((q,i)=>(
-              <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:8,padding:14,marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-                  <div>
-                    <div style={{fontWeight:700,fontSize:13,color:OR}}>{q.folio}</div>
-                    <div style={{color:GRL,fontSize:11,marginTop:2}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}</div>
-                  </div>
-                  <span style={{fontWeight:700,fontSize:13,color:"#1a1a1a"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</span>
-                </div>
-                <div style={{fontSize:12,color:GRL,marginBottom:4}}>Cliente: <strong style={{color:"#1a1a1a"}}>{q.cliente||q.empresa||q.nombre||"—"}</strong></div>
-                {(session?.rol==="admin"||session?.rol==="superadmin")&&
-                  <div style={{fontSize:11,color:GRL,marginBottom:8}}>Elaboró: {q.nombre} · @{q.usuario}</div>}
-                <div style={{fontSize:11,color:GRL,marginBottom:10}}>{(q.items||[]).length} producto{(q.items||[]).length!==1?"s":""} · Vigencia: {q.vigencia||"—"}</div>
-                <div style={{display:"flex",gap:6}}>
-                  <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
-                    style={{flex:1,padding:"7px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600}}>
-                    {quoteDetail?.folio===q.folio?"▲ Ocultar":"▼ Ver detalle"}
-                  </button>
-                  <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"7 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
-                    style={{flex:2,padding:"7px",background:OR,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:700}}>
-                    📄 Regenerar PDF
-                  </button>
-                </div>
-                {quoteDetail?.folio===q.folio&&(
-                  <div style={{marginTop:10,borderTop:"1px solid "+BD,paddingTop:10}}>
-                    <div style={{fontSize:10,color:GRL,fontWeight:700,marginBottom:6}}>PRODUCTOS</div>
-                    {(q.items||[]).map((it,j)=>(
-                      <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"4px 0",borderBottom:"1px solid #f3f4f6"}}>
-                        <div style={{flex:1}}><span style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</span><br/>{it.descripcion}</div>
-                        <div style={{textAlign:"right",marginLeft:8,whiteSpace:"nowrap"}}>
-                          <div>{it.cantidad} pz</div>
-                          <div style={{fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</div>
-                        </div>
-                      </div>
-                    ))}
-                    {q.nota&&<div style={{marginTop:6,fontSize:11,color:GRL}}>Obs: {q.nota}</div>}
-                  </div>
-                )}
-              </div>
-            ))}</div>
-          ):(
-            <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-              <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-                <thead><tr style={{background:"#f0f0f0"}}>
-                  {["FOLIO","FECHA","CLIENTE",...((session?.rol==="admin"||session?.rol==="superadmin")?["ELABORÓ"]:[]),"PRODUCTOS","SUBTOTAL","VIGENCIA","ACCIONES"]
-                    .map(h=><th key={h} style={{padding:"9px 12px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1,whiteSpace:"nowrap"}}>{h}</th>)}
-                </tr></thead>
-                <tbody>{quotes.map((q,i)=>(
-                  <React.Fragment key={i}>
-                    <tr style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
-                      <td style={{padding:"9px 12px",fontWeight:700,color:OR,whiteSpace:"nowrap"}}>{q.folio}</td>
-                      <td style={{padding:"9px 12px",color:GRL,whiteSpace:"nowrap"}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric"})}</td>
-                      <td style={{padding:"9px 12px",fontWeight:600}}>{q.cliente||q.empresa||q.nombre||"—"}</td>
-                      {(session?.rol==="admin"||session?.rol==="superadmin")&&
-                        <td style={{padding:"9px 12px",color:GRL,fontSize:11}}>{q.nombre}<br/><span style={{fontFamily:"monospace",fontSize:10}}>@{q.usuario}</span></td>}
-                      <td style={{padding:"9px 12px",textAlign:"center",color:GRL}}>{(q.items||[]).length}</td>
-                      <td style={{padding:"9px 12px",fontWeight:700,color:"#1a1a1a",whiteSpace:"nowrap"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</td>
-                      <td style={{padding:"9px 12px",color:GRL,fontSize:11,whiteSpace:"nowrap"}}>{q.vigencia||"—"}</td>
-                      <td style={{padding:"9px 12px"}}>
-                        <div style={{display:"flex",gap:6}}>
-                          <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
-                            style={{padding:"5px 10px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:4,cursor:"pointer",fontSize:10,fontWeight:600,whiteSpace:"nowrap"}}>
-                            {quoteDetail?.folio===q.folio?"▲ Ocultar":"▼ Detalle"}
-                          </button>
-                          <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
-                            style={{padding:"5px 10px",background:OR,color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontSize:10,fontWeight:700,whiteSpace:"nowrap"}}>
-                            📄 PDF
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                    {quoteDetail?.folio===q.folio&&(
-                      <tr style={{background:"#fffbf5"}}>
-                        <td colSpan={9} style={{padding:"12px 16px",borderTop:"1px solid #fde68a"}}>
-                          <div style={{fontSize:11,fontWeight:700,color:OR,marginBottom:8}}>DETALLE DE PRODUCTOS</div>
-                          <table style={{width:"100%",borderCollapse:"collapse",fontSize:11}}>
-                            <thead><tr style={{background:"#fff7ed"}}>
-                              {["CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"].map(h=>(
-                                <th key={h} style={{padding:"5px 8px",textAlign:"left",color:GRL,fontWeight:700,fontSize:10}}>{h}</th>
-                              ))}
-                            </tr></thead>
-                            <tbody>{(q.items||[]).map((it,j)=>(
-                              <tr key={j} style={{borderTop:"1px solid #fde68a"}}>
-                                <td style={{padding:"5px 8px",fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</td>
-                                <td style={{padding:"5px 8px"}}>{it.descripcion}</td>
-                                <td style={{padding:"5px 8px",textAlign:"center"}}>{it.cantidad}</td>
-                                <td style={{padding:"5px 8px",textAlign:"right"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio||0)}</td>
-                                <td style={{padding:"5px 8px",textAlign:"right",fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</td>
-                              </tr>
-                            ))}</tbody>
-                          </table>
-                          {q.nota&&<div style={{marginTop:8,fontSize:11,color:GRL}}>📝 <strong>Observaciones:</strong> {q.nota}</div>}
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                ))}</tbody>
-              </table>
-            </div>
-          )
-        )}
-      </div>}
     </div>
   </div>;
 
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
   const lista=session?.lista, isVend=lista==="VENDEDOR"||session?.rol==="admin"||session?.rol==="superadmin";
-  const [clienteTab, setClienteTab] = useState("catalog");
   return <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
-    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
-    {/* FAB carrito — siempre visible en cliente */}
-    {!cartOpen&&<CartFAB cart={cart} onClick={()=>setCartOpen(true)} mob={mob}/>}
+    {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)}/>}
+    {/* Botón flotante carrito */}
+    {cart.length>0&&!cartOpen&&(
+      <button onClick={()=>setCartOpen(true)} style={{position:"fixed",bottom:24,right:24,zIndex:1000,
+        background:OR,color:"#fff",border:"none",borderRadius:"50px",padding:"12px 20px",
+        cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 4px 16px rgba(255,107,6,0.5)",
+        display:"flex",alignItems:"center",gap:8}}>
+        🧾 <span>Cotización</span>
+        <span style={{background:"#fff",color:OR,borderRadius:"50%",width:22,height:22,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800}}>{cart.length}</span>
+      </button>
+    )}
     {Hdr}
-    {/* Tabs cliente */}
-    <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 20px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-      {[["catalog","🏷️ CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"]].map(([k,l])=>(
-        <button key={k} onClick={()=>{setClienteTab(k);if(k==="quotes")loadQuotes();}}
-          style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",
-            color:clienteTab===k?OR:GRL,borderBottom:clienteTab===k?"2px solid "+OR:"2px solid transparent",
-            cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
-      ))}
-    </div>
     <div style={{background:"linear-gradient(90deg,#e05500,#c44a00)",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
       <span style={{color:"#fff",fontSize:14}}>★</span>
       <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:700}}>CONTADO ANTICIPADO: <span style={{color:"#ffe0c0"}}>3% DESCUENTO ADICIONAL</span></span>
     </div>
-    <div style={{background:"linear-gradient(90deg,#1e40af,#1d4ed8,#2563eb)",padding:"10px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"inset 0 -2px 0 rgba(0,0,0,0.15)"}}>
+    {(isVend)&&<div style={{background:"linear-gradient(90deg,#1e40af,#1d4ed8,#2563eb)",padding:"10px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"inset 0 -2px 0 rgba(0,0,0,0.15)"}}>
       <span style={{fontSize:mob?16:18}}>💳</span>
       <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:600,letterSpacing:0.3}}>
         ¡Solicita tus compras hasta con{" "}
@@ -1807,7 +1267,7 @@ export default function App(){
         <span style={{color:"#fbbf24",fontWeight:800}}>!</span>
       </span>
       <span style={{fontSize:mob?14:16}}>🏆</span>
-    </div>
+    </div>}
     <div style={{padding:mob?12:20,maxWidth:1400,margin:"0 auto"}}>
       <div style={{background:"#fff7ed",borderLeft:"3px solid "+OR,border:"1px solid #fed7aa",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
         <span style={{color:OR,fontWeight:700}}>i</span>
@@ -1820,7 +1280,6 @@ export default function App(){
         <span style={{color:"#9333ea",fontWeight:700}}>★</span>
         <span style={{color:"#9333ea",fontSize:11,fontWeight:700}}>Modo Vendedor — Todos los precios visibles</span>
       </div>}
-      {clienteTab==="catalog"&&<>
       {prodLoad&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando productos de Firebase...</div>}
       {!prodLoad&&<>
         <Buscador search={search} ds={ds} onChange={setSearch} count={filtered.length} mob={mob}/>
@@ -1830,6 +1289,7 @@ export default function App(){
             return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
               <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{p.codigo}</div>
               <div style={{fontSize:12,fontWeight:600,marginBottom:8,lineHeight:1.4}}>{p.descripcion}</div>
+              {/* Precios */}
               {isVend?<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
                 <div style={{background:"#f0fdf4",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>PÚBLICO</div><div style={{color:"#16a34a",fontWeight:700,fontSize:12}}>{money(p.publico)}</div></div>
                 <div style={{background:"#eff6ff",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>DISTRIBUIDOR</div><div style={{color:"#2563eb",fontWeight:700,fontSize:12}}>{money(p.distribuidor)}</div></div>
@@ -1838,10 +1298,12 @@ export default function App(){
                 <span style={{color:GRL,fontSize:10}}>Almacén ppal: <strong>{almPpal(p)}</strong></span>
                 <span style={{color:OR,fontWeight:700,fontSize:14}}>{money(getPrecio(p,lista))}</span>
               </div>}
+              {/* Stock total y disponibilidad */}
               <div style={{display:"flex",gap:8,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Total: {stockVis(tot)}</span>
                 <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
               </div>
+              {/* Desglose por almacén */}
               <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
                 {ALMS.map((a,idx)=>{
                   const v=Number(p[a])||0;
@@ -1902,63 +1364,6 @@ export default function App(){
         )}
         <Pager total={filtered.length} pg={page} setPg={setPage} ps={PS}/>
       </>}
-      </>}
-
-      {clienteTab==="quotes"&&<div style={{marginTop:8}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14,flexWrap:"wrap",gap:8}}>
-          <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>Mis Cotizaciones</span>
-          <button onClick={loadQuotes} style={{background:"#f0f0f0",color:GRL,border:"1px solid "+BD,padding:"8px 14px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>↻ RECARGAR</button>
-        </div>
-        {quotesLoad&&<div style={{textAlign:"center",padding:30,color:GRL}}>Cargando cotizaciones...</div>}
-        {!quotesLoad&&quotes.length===0&&(
-          <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
-            <div style={{fontSize:36,marginBottom:10}}>📋</div>
-            <div style={{fontSize:14,fontWeight:600,marginBottom:4}}>Sin cotizaciones aún</div>
-            <div style={{fontSize:12}}>Las cotizaciones que generes aparecerán aquí</div>
-          </div>
-        )}
-        {!quotesLoad&&quotes.map((q,i)=>(
-          <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:8,padding:14,marginBottom:10,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:8}}>
-              <div>
-                <div style={{fontWeight:700,fontSize:13,color:OR}}>{q.folio}</div>
-                <div style={{color:GRL,fontSize:11,marginTop:2}}>{new Date(q.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"})}</div>
-              </div>
-              <span style={{fontWeight:700,fontSize:14,color:"#1a1a1a"}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(q.subtotal||0)}</span>
-            </div>
-            <div style={{fontSize:12,color:GRL,marginBottom:4}}>Cliente: <strong style={{color:"#1a1a1a"}}>{q.cliente||q.empresa||q.nombre||"—"}</strong></div>
-            <div style={{fontSize:11,color:GRL,marginBottom:10}}>{(q.items||[]).length} producto{(q.items||[]).length!==1?"s":""} · Vigencia: {q.vigencia||"—"}</div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-              <button onClick={()=>setQuoteDetail(quoteDetail?.folio===q.folio?null:q)}
-                style={{flex:1,padding:"8px",background:"#f3f4f6",color:"#374151",border:"1px solid "+BD,borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:600}}>
-                {quoteDetail?.folio===q.folio?"▲ Ocultar detalle":"▼ Ver detalle"}
-              </button>
-              <button onClick={()=>generarPDF({folio:q.folio,session:{nombre:q.nombre,empresa:q.empresa||""},items:q.items||[],nota:q.nota||"",vigencia:q.vigencia||"15 días naturales",clienteLabel:q.cliente||q.empresa||q.nombre||"Público en general"})}
-                style={{flex:2,padding:"8px",background:OR,color:"#fff",border:"none",borderRadius:5,cursor:"pointer",fontSize:11,fontWeight:700}}>
-                📄 Regenerar PDF
-              </button>
-            </div>
-            {quoteDetail?.folio===q.folio&&(
-              <div style={{marginTop:10,borderTop:"1px solid "+BD,paddingTop:10}}>
-                <div style={{fontSize:10,color:GRL,fontWeight:700,marginBottom:6}}>PRODUCTOS</div>
-                {(q.items||[]).map((it,j)=>(
-                  <div key={j} style={{display:"flex",justifyContent:"space-between",fontSize:11,padding:"5px 0",borderBottom:"1px solid #f3f4f6"}}>
-                    <div style={{flex:1}}>
-                      <span style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</span>
-                      <div style={{marginTop:1}}>{it.descripcion}</div>
-                    </div>
-                    <div style={{textAlign:"right",marginLeft:8,whiteSpace:"nowrap"}}>
-                      <div style={{color:GRL,fontSize:10}}>{it.cantidad} pz × {new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format(it.precio||0)}</div>
-                      <div style={{fontWeight:700,color:OR}}>{new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN"}).format((it.precio||0)*(it.cantidad||1))}</div>
-                    </div>
-                  </div>
-                ))}
-                {q.nota&&<div style={{marginTop:8,fontSize:11,color:GRL}}>📝 {q.nota}</div>}
-              </div>
-            )}
-          </div>
-        ))}
-      </div>}
     </div>
   </div>;
 }
