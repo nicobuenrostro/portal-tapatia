@@ -729,10 +729,14 @@ export default function App(){
     dbRef.current=setTimeout(()=>{setDs(search);setPage(0);},300);
     return()=>{if(dbRef.current)clearTimeout(dbRef.current);};
   },[search]);
+  // Solo carga inicial si ya había sesión guardada (refresh de página)
   useEffect(()=>{
-    if(session) loadProducts();
-    if(isAdminRole(session)) loadUsers();
-  },[session]);
+    if(session){ 
+      loadProducts();
+      if(isAdminRole(session)) loadUsers();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
 
   async function loadProducts(){
     setProdLoad(true);
@@ -782,6 +786,11 @@ export default function App(){
       localStorage.setItem("gt_session",JSON.stringify(u));
       setView(u.rol==="admin"||u.rol==="superadmin"?"admin":"client");
       setLu("");setLp("");
+      // Cargar datos inmediatamente tras login sin esperar efecto
+      const adminRole=u.rol==="admin"||u.rol==="superadmin";
+      const prodSnap=await fbGetProductos();
+      if(prodSnap!==null) setProducts(prodSnap);
+      if(adminRole){ const userSnap=await fbGetUsuarios(); if(userSnap!==null) setUsers(userSnap); }
     }catch(e){setLerr("Error: "+e.message);}
     setLoginLoad(false);
   }
