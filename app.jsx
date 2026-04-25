@@ -146,7 +146,7 @@ function parseCsv(text){
   if(lines.length<2) return [];
   const first=lines[0];
   const delim=first.includes("\t")?"\t":first.includes(";")?";":","
-  const headers=first.split(delim).map(h=>safe(h));
+  const headers=first.split(delim).map(h=>h.trim().replace(/"/g,""));
   return lines.slice(1).map(line=>{
     const vals=line.split(delim),obj={};
     headers.forEach((h,i)=>{const v=safe(vals[i]??"");obj[h]=(!isNaN(v)&&v!=="")?parseFloat(v):v;});
@@ -850,14 +850,19 @@ export default function App(){
         const rows=parseCsv(ev.target.result);
         if(rows.length===0){setMsg("❌ No se encontró columna CÓDIGO.");return;}
         const mapped=rows.map(r=>({
-          codigo:safe(r.CODIGO??r["CÓDIGO"]??r.codigo??""),
+          codigo:     safe(r.CODIGO??r["CÓDIGO"]??r.codigo??""),
           descripcion:safe(r.DESCRIPCION??r["DESCRIPCIÓN"]??r.descripcion??""),
-          gdl1:safeNum(r.GDL1),gdl3:safeNum(r.GDL3),ags:safeNum(r.AGS),
-          col:safeNum(r.COL),len:safeNum(r.LEN),cul:safeNum(r.CUL),
-          publico:safeNum(r.PUBLICO??r["PÚBLICO"]),
-          distribuidor:safeNum(r.DISTRIBUIDOR),
-          asociado:safeNum(r.ASOCIADO),
-          iva:safe(r.IVA??r.iva??"0"),
+          gdl1:safeNum(r.GDL1??r.gdl1),
+          gdl3:safeNum(r.GDL3??r.gdl3),
+          ags: safeNum(r.AGS??r.ags),
+          col: safeNum(r.COL??r.col),
+          len: safeNum(r.LEN??r.len),
+          cul: safeNum(r.CUL??r.cul),
+          publico:     safeNum(r.PUBLICO??r["PÚBLICO"]??r.publico),
+          distribuidor:safeNum(r.DISTRIBUIDOR??r.distribuidor),
+          asociado:    safeNum(r.ASOCIADO??r.asociado),
+          // IVA: manejar columna con espacio al final "IVA "
+          iva: safe(r["IVA "]??r.IVA??r["iva "]??r.iva??"0"),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.codigo);
         if(mapped.length===0){setMsg("❌ No hay productos válidos.");return;}
