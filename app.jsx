@@ -36,8 +36,13 @@ const stockVis = t => t>=30?"+30":t;
 const nColor   = t => t===0?"#dc2626":t<=5?"#ea580c":t<=20?"#d97706":"#16a34a";
 const almPpal  = p => { const i=ALMS.findIndex(a=>(Number(p[a])||0)>0); return i>=0?ALMS_L[i]:"—"; };
 const getPrecio= (p,l) => l==="PUBLICO"||l==="PÚBLICO"?Number(p.publico)||0:l==="DISTRIBUIDOR"?Number(p.distribuidor)||0:l==="ASOCIADO"?Number(p.asociado)||0:0;
-// Detectar si un producto es agrícola (sin IVA)
-const esAgricola = desc => /agr[ií]col|i-1\b|r-1\b|f-2\b|f-3\b|r1\b|r-1|kirti|mrt|tractor|campo|harvest/i.test(desc||"");
+// IVA desde columna del producto (del CSV)
+// Acepta: SI/NO, 1/0, TRUE/FALSE, 16/0, S/N
+const tieneIVA = p => {
+  const v = String(p.iva ?? p.IVA ?? "").trim().toUpperCase();
+  if(v===""||v==="0"||v==="NO"||v==="N"||v==="FALSE") return false;
+  return true; // SI, 1, TRUE, 16, cualquier otro valor positivo
+};
 
 // ── Hash SHA-256 ──────────────────────────────────────────────
 async function hashPassword(pwd){
@@ -253,8 +258,8 @@ async function generarPDF({folio, session, items, nota, vigencia, descuento, cli
   doc2.text(clienteNombre||"Público en general",M+20,y);
 
   // ── Clasificación IVA ──
-  const sinIva=items.filter(it=>esAgricola(it.descripcion));
-  const conIva=items.filter(it=>!esAgricola(it.descripcion));
+  const sinIva=items.filter(it=>!tieneIVA(it));
+  const conIva=items.filter(it=>tieneIVA(it));
   const todosSinIva=conIva.length===0;
   const todosConIva=sinIva.length===0;
 
@@ -397,7 +402,9 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
   const [folioMsg,setFolioMsg]=useState("");
 
   const subtotal=cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
-  const ivaTotal=cart.filter(it=>!esAgricola(it.descripcion)).reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
+  const ivaTotal=cart.filter(it=>tieneIVA(it)).reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
+
+  // Al agregar al carrito guardamos el campo iva del producto
   const descMonto=canDiscount&&descuento>0?subtotal*(descuento/100):0;
   const total=subtotal+ivaTotal-descMonto;
 
@@ -461,14 +468,14 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
             Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo
           </div>}
           {cart.map((it,i)=>{
-            const agr=esAgricola(it.descripcion);
+            const conIvaItem=tieneIVA(it);
             return(
               <div key={i} style={{border:"1px solid #e5e7eb",borderRadius:6,padding:12,marginBottom:10,background:"#fafafa"}}>
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                   <div style={{flex:1,marginRight:8}}>
                     <div style={{fontFamily:"monospace",color:GRL,fontSize:10}}>{it.codigo}</div>
                     <div style={{fontSize:12,fontWeight:600,lineHeight:1.3,color:"#1a1a1a"}}>{it.descripcion}</div>
-                    <div style={{fontSize:10,marginTop:2,color:agr?"#dc2626":"#2563eb",fontWeight:600}}>{agr?"🌾 Sin IVA (agrícola)":"🧾 Con IVA 16%"}</div>
+                    <div style={{fontSize:10,marginTop:2,color:conIvaItem?"#2563eb":"#dc2626",fontWeight:600}}>{conIvaItem?"🧾 Con IVA 16%":"🌾 Sin IVA"}</div>
                   </div>
                   <button onClick={()=>remove(i)} style={{background:"#fee2e2",border:"none",color:"#dc2626",width:24,height:24,borderRadius:"50%",cursor:"pointer",fontSize:12,fontWeight:700,flexShrink:0}}>✕</button>
                 </div>
@@ -814,7 +821,7 @@ export default function App(){
     setCart(prev=>{
       const idx=prev.findIndex(it=>it.codigo===p.codigo);
       if(idx>=0) return prev.map((it,i)=>i===idx?{...it,cantidad:it.cantidad+1}:it);
-      return [...prev,{codigo:p.codigo,descripcion:p.descripcion,precio,tipoPrecio,cantidad:1,_publico:Number(p.publico)||0,_distribuidor:Number(p.distribuidor)||0,_asociado:Number(p.asociado)||0}];
+      return [...prev,{codigo:p.codigo,descripcion:p.descripcion,iva:p.iva||"0",precio,tipoPrecio,cantidad:1,_publico:Number(p.publico)||0,_distribuidor:Number(p.distribuidor)||0,_asociado:Number(p.asociado)||0}];
     });
   }
 
@@ -857,6 +864,7 @@ export default function App(){
           descripcion:String(r.DESCRIPCION||r["DESCRIPCIÓN"]||"").trim(),
           gdl1:Number(r.GDL1||0),gdl3:Number(r.GDL3||0),ags:Number(r.AGS||0),col:Number(r.COL||0),len:Number(r.LEN||0),cul:Number(r.CUL||0),
           publico:Number(r.PUBLICO||r["PÚBLICO"]||0),distribuidor:Number(r.DISTRIBUIDOR||0),asociado:Number(r.ASOCIADO||0),
+          iva:String(r.IVA||r["iva"]||"0").trim(),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.codigo);
         if(mapped.length===0){setMsg("❌ No hay productos válidos.");return;}
@@ -1177,11 +1185,11 @@ export default function App(){
             <Buscador search={search} ds={ds} onChange={setSearch} count={filtered.length} mob={mob}/>
             {mob?(
               <div>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
-                const tot=calcTotal(p),disp=tot>0,agr=esAgricola(p.descripcion);
+                const tot=calcTotal(p),disp=tot>0,conIvaP=tieneIVA(p);
                 return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
                   <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{p.codigo}</div>
                   <div style={{fontSize:12,fontWeight:600,marginBottom:4,lineHeight:1.4}}>{p.descripcion}</div>
-                  <div style={{fontSize:10,marginBottom:6,color:agr?"#dc2626":"#2563eb",fontWeight:600}}>{agr?"🌾 Sin IVA":"🧾 +IVA 16%"}</div>
+                  <div style={{fontSize:10,marginBottom:6,color:conIvaP?"#2563eb":"#dc2626",fontWeight:600}}>{conIvaP?"🧾 +IVA 16%":"🌾 Sin IVA"}</div>
                   {vend?<div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:8}}>
                     <div style={{background:"#f0fdf4",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>PÚBLICO</div><div style={{color:"#16a34a",fontWeight:700,fontSize:12}}>{money(p.publico)}</div></div>
                     <div style={{background:"#eff6ff",borderRadius:4,padding:"4px 8px"}}><div style={{color:GRL,fontSize:9}}>DISTRIBUIDOR</div><div style={{color:"#2563eb",fontWeight:700,fontSize:12}}>{money(p.distribuidor)}</div></div>
@@ -1222,11 +1230,11 @@ export default function App(){
                     <th style={{padding:"9px 6px",width:34}}></th>
                   </tr></thead>
                   <tbody>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
-                    const tot=calcTotal(p),disp=tot>0,agr=esAgricola(p.descripcion);
+                    const tot=calcTotal(p),disp=tot>0,conIvaP=tieneIVA(p);
                     return <tr key={i} style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
                       <td style={{padding:"7px 12px",fontFamily:"monospace",color:GRL,whiteSpace:"nowrap",fontSize:11}}>{p.codigo}</td>
                       <td style={{padding:"7px 12px",minWidth:260}}>{p.descripcion}</td>
-                      <td style={{padding:"7px 6px",textAlign:"center",fontSize:10,fontWeight:700,color:agr?"#dc2626":"#2563eb"}}>{agr?"0%":"16%"}</td>
+                      <td style={{padding:"7px 6px",textAlign:"center",fontSize:10,fontWeight:700,color:conIvaP?"#2563eb":"#dc2626"}}>{conIvaP?"16%":"0%"}</td>
                       {vend?<>
                         <td style={{padding:"7px 8px",textAlign:"right",color:"#16a34a",fontWeight:600}}>{money(p.publico)}</td>
                         <td style={{padding:"7px 8px",textAlign:"right",color:"#2563eb",fontWeight:600}}>{money(p.distribuidor)}</td>
