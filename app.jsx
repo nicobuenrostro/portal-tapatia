@@ -231,7 +231,12 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     const resp=await fetch(LOGO_URL);
     const blob=await resp.blob();
     const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
-    doc2.addImage(b64,"PNG",M,4,38,20);
+    // Calcular dimensiones manteniendo aspect ratio
+    const img=new Image();
+    await new Promise(r=>{img.onload=r;img.src=b64;});
+    const ratio=img.naturalWidth/img.naturalHeight;
+    const imgH=22, imgW=imgH*ratio;
+    doc2.addImage(b64,"PNG",M,4,imgW,imgH);
   } catch(e){
     doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
     doc2.text("GRUPO TAPATÍA",M,16);
@@ -287,7 +292,7 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   const rows=sitems.map((it,i)=>[
     i+1,
     safe(it.codigo)||"—",
-    (safe(it.descripcion)||"—")+(tieneIVA(it)?"":" *"),
+    safe(it.descripcion)||"—",
     safeNum(it.cantidad),
     money2(it.precio),
     money2(safeNum(it.precio)*safeNum(it.cantidad)),
