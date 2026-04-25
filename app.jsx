@@ -7,7 +7,7 @@ import {
 import jsPDF from "jspdf";
 import "jspdf-autotable";
 
-// ── Firebase config ───────────────────────────────────────────
+// ── Firebase ──────────────────────────────────────────────────
 const firebaseConfig = {
   apiKey: "AIzaSyDb5e9x1c73eFxOp4hd2BjEsqmYL2_JTvY",
   authDomain: "portal-tapatia.firebaseapp.com",
@@ -19,7 +19,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
-// ── Brand ─────────────────────────────────────────────────────
+// ── Constantes ────────────────────────────────────────────────
 const OR   = "#FF6B06";
 const GRL  = "#6b6b6b";
 const DK   = "#f4f4f4";
@@ -27,79 +27,85 @@ const CD   = "#ffffff";
 const BD   = "#e0e0e0";
 const ALMS   = ["gdl1","gdl3","ags","col","len","cul"];
 const ALMS_L = ["GDL1","GDL3","AGS","COL","LEN","CUL"];
+const LOGO_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
 
 // ── Helpers ───────────────────────────────────────────────────
-const money    = n => (!n||isNaN(n)||Number(n)===0)?"—":new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:2}).format(n);
-const money2   = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:2}).format(n||0);
-const calcTotal= p => ALMS.reduce((t,a)=>t+(Number(p[a])||0),0);
-const stockVis = t => t>=30?"+30":t;
-const nColor   = t => t===0?"#dc2626":t<=5?"#ea580c":t<=20?"#d97706":"#16a34a";
-const almPpal  = p => { const i=ALMS.findIndex(a=>(Number(p[a])||0)>0); return i>=0?ALMS_L[i]:"—"; };
-const getPrecio= (p,l) => l==="PUBLICO"||l==="PÚBLICO"?Number(p.publico)||0:l==="DISTRIBUIDOR"?Number(p.distribuidor)||0:l==="ASOCIADO"?Number(p.asociado)||0:0;
-// IVA desde columna del producto (del CSV)
-// Acepta: SI/NO, 1/0, TRUE/FALSE, 16/0, S/N
-const tieneIVA = p => {
-  const v = String(p.iva ?? p.IVA ?? "").trim().toUpperCase();
-  if(v===""||v==="0"||v==="NO"||v==="N"||v==="FALSE") return false;
-  return true; // SI, 1, TRUE, 16, cualquier otro valor positivo
+const safe    = v => String(v??"").trim();
+const safeNum = v => { const n=Number(v); return isNaN(n)?0:n; };
+const money   = n => { const v=safeNum(n); return v===0?"—":new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:2}).format(v); };
+const money2  = n => new Intl.NumberFormat("es-MX",{style:"currency",currency:"MXN",minimumFractionDigits:2}).format(safeNum(n));
+const calcTotal = p => ALMS.reduce((t,a)=>t+safeNum(p[a]),0);
+const stockVis  = t => t>=30?"+30":String(t);
+const nColor    = t => t===0?"#dc2626":t<=5?"#ea580c":t<=20?"#d97706":"#16a34a";
+const almPpal   = p => { const i=ALMS.findIndex(a=>safeNum(p[a])>0); return i>=0?ALMS_L[i]:"—"; };
+const getPrecio = (p,l) => {
+  const s=safe(l).toUpperCase();
+  if(s==="DISTRIBUIDOR") return safeNum(p.distribuidor);
+  if(s==="ASOCIADO")     return safeNum(p.asociado);
+  return safeNum(p.publico);
 };
+// IVA desde columna CSV — acepta SI/NO, 1/0, TRUE/FALSE, 16/0
+const tieneIVA = p => {
+  const v=safe(p?.iva??p?.IVA??"").toUpperCase();
+  return v!==""&&v!=="0"&&v!=="NO"&&v!=="N"&&v!=="FALSE";
+};
+const clampDesc = v => Math.min(30,Math.max(0,Math.round(parseInt(v)||0)));
 
 // ── Hash SHA-256 ──────────────────────────────────────────────
 async function hashPassword(pwd){
-  const enc=new TextEncoder().encode(pwd);
+  const enc=new TextEncoder().encode(safe(pwd));
   const buf=await crypto.subtle.digest("SHA-256",enc);
   return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,"0")).join("");
 }
 async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 
-// ── Firebase ──────────────────────────────────────────────────
+// ── Firebase helpers ──────────────────────────────────────────
 async function fbGetUsuarios(){
   try {
     const snap=await getDocs(collection(db,"usuarios"));
     if(snap.empty) return [];
-    return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.nombre||"").localeCompare(b.nombre||""));
-  } catch(e){ console.error("Error leyendo usuarios:",e); return null; }
+    return snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>safe(a.nombre).localeCompare(safe(b.nombre)));
+  } catch(e){ console.error("fbGetUsuarios:",e); return null; }
 }
 async function fbGetProductos(){
   try {
     const snap=await getDocs(collection(db,"productos"));
     if(snap.empty) return [];
-    return snap.docs.map(d=>({id:d.id,...d.data()})).sort((a,b)=>(a.codigo||"").localeCompare(b.codigo||""));
-  } catch(e){ console.error("Error leyendo productos:",e); return null; }
+    return snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>safe(a.codigo).localeCompare(safe(b.codigo)));
+  } catch(e){ console.error("fbGetProductos:",e); return null; }
 }
-async function fbGetCotizaciones(usuario, isAdmin){
+async function fbGetCotizaciones(usuario,isAdmin){
   try {
     const snap=await getDocs(collection(db,"cotizaciones"));
     if(snap.empty) return [];
     let data=snap.docs.map(d=>({id:d.id,...d.data()}));
-    if(!isAdmin) data=data.filter(c=>c.usuario===usuario);
-    return data.sort((a,b)=>new Date(b.fecha)-new Date(a.fecha));
-  } catch(e){ console.error("Error leyendo cotizaciones:",e); return null; }
+    if(!isAdmin) data=data.filter(c=>safe(c.usuario)===safe(usuario));
+    return data.sort((a,b)=>new Date(b.fecha||0)-new Date(a.fecha||0));
+  } catch(e){ console.error("fbGetCotizaciones:",e); return null; }
 }
 
-// ── Búsqueda inteligente ──────────────────────────────────────
-function cIn(s){return String(s).toUpperCase().trim().replace(/\s+/g," ");}
-function strp(s){return String(s).toUpperCase().replace(/[^0-9XR\.]/g,"");}
+// ── Búsqueda ──────────────────────────────────────────────────
+function cIn(s){return safe(s).toUpperCase();}
+function strp(s){return safe(s).toUpperCase().replace(/[^0-9XR\.]/g,"");}
 function getVariants(s){
   if(!s)return[];
-  const c=String(s).toUpperCase().trim(),b=strp(c);
+  const c=safe(s).toUpperCase(),b=strp(c);
   const vars=[c,b,c.replace(/[\.\-\/\s]/g,""),c.replace(/[\.\-\/\sX]/g,"").replace("R","")];
   const nums=c.replace(/[XR]/g," ").replace(/[\.\-\/]/g," ").replace(/\s+/g," ").trim().split(" ").filter(x=>x.length>0);
   if(nums.length===3){vars.push(nums.join(""),nums[0]+"."+nums[1]+"-"+nums[2],nums[0]+nums[1]+"-"+nums[2],nums[0]+"."+nums[1]+"R"+nums[2],nums[0]+"-"+nums[1]+"-"+nums[2],nums[0]+" "+nums[1]+" "+nums[2]);}
   if(nums.length===2){vars.push(nums.join(""),nums[0]+"."+nums[1],nums[0]+"-"+nums[1]);}
   if(/^\d{5,6}$/.test(b)){
     [[2,1,2],[2,2,2],[3,2,2],[2,2,3]].forEach(([a,bv,cv])=>{
-      if(b.length===a+bv+cv){
-        const p1=b.slice(0,a),p2=b.slice(a,a+bv),p3=b.slice(a+bv);
-        vars.push(p1+"."+p2+"-"+p3,p1+p2+"-"+p3,p1+"."+p2+"R"+p3,p1+" "+p2+" "+p3,p1+p2+p3);
-      }
+      if(b.length===a+bv+cv){const p1=b.slice(0,a),p2=b.slice(a,a+bv),p3=b.slice(a+bv);vars.push(p1+"."+p2+"-"+p3,p1+p2+"-"+p3,p1+"."+p2+"R"+p3,p1+" "+p2+" "+p3,p1+p2+p3);}
     });
   }
-  const seen={};return vars.filter(v=>{const t=String(v).trim();return t&&!seen[t]&&(seen[t]=true);});
+  const seen={};return vars.filter(v=>{const t=safe(v);return t&&!seen[t]&&(seen[t]=true);});
 }
 function exMedidas(desc){
   if(!desc)return[];
-  const s=String(desc).toUpperCase(),found=[];
+  const s=safe(desc).toUpperCase(),found=[];
   [/\d{3}\/\d{2}[R]\d{2,3}(?:\.\d)?/g,/\d{2,3}[X]\d{2,3}(?:\.\d{2})?[-R]\d{2,3}/g,
    /\d{1,3}\.\d{2,3}[-\/R]\d{2,3}/g,/\d{2}\.?\d{1,2}[-\/R]\d{2,3}/g,/\d{2,3}\s\d{1,3}\s\d{2,3}/g]
     .forEach(p=>(s.match(p)||[]).forEach(m=>found.push(m)));
@@ -107,7 +113,7 @@ function exMedidas(desc){
 }
 function smartMatch(q,p){
   if(!q||q.trim().length<2)return true;
-  const desc=String(p.descripcion||"").toUpperCase(),cod=String(p.codigo||"").toUpperCase();
+  const desc=cIn(p.descripcion),cod=cIn(p.codigo);
   const qc=cIn(q),qs=strp(qc);
   if(desc.includes(qc)||cod.includes(qc))return true;
   if(qs.length>=3&&(strp(desc).includes(qs)||strp(cod).includes(qs)))return true;
@@ -136,17 +142,19 @@ function isAdminRole(s){ return s?.rol==="admin"||s?.rol==="superadmin"; }
 function isVendedor(s){ return s?.lista==="VENDEDOR"||isAdminRole(s); }
 
 function parseCsv(text){
-  const lines=text.trim().split("\n"),first=lines[0];
+  const lines=text.trim().split(/\r?\n/);
+  if(lines.length<2) return [];
+  const first=lines[0];
   const delim=first.includes("\t")?"\t":first.includes(";")?";":","
-  const headers=first.split(delim).map(h=>h.trim().replace(/"/g,""));
+  const headers=first.split(delim).map(h=>safe(h));
   return lines.slice(1).map(line=>{
     const vals=line.split(delim),obj={};
-    headers.forEach((h,i)=>{const v=(vals[i]||"").trim().replace(/"/g,"");obj[h]=(!isNaN(v)&&v!=="")?parseFloat(v):v;});
+    headers.forEach((h,i)=>{const v=safe(vals[i]??"");obj[h]=(!isNaN(v)&&v!=="")?parseFloat(v):v;});
     return obj;
-  }).filter(r=>r.CODIGO||r["CÓDIGO"]);
+  }).filter(r=>r.CODIGO||r["CÓDIGO"]||r.codigo);
 }
 
-// ── UI ────────────────────────────────────────────────────────
+// ── UI Components ─────────────────────────────────────────────
 function Badge({val}){
   const map={PUBLICO:{bg:"#dcfce7",c:"#16a34a"},PÚBLICO:{bg:"#dcfce7",c:"#16a34a"},DISTRIBUIDOR:{bg:"#dbeafe",c:"#2563eb"},ASOCIADO:{bg:"#fff7ed",c:"#ea580c"},VENDEDOR:{bg:"#f3e8ff",c:"#9333ea"},superadmin:{bg:"#fef3c7",c:"#d97706"},admin:{bg:"#dbeafe",c:"#2563eb"},client:{bg:"#f3f4f6",c:"#6b7280"},activo:{bg:"#dcfce7",c:"#16a34a"},inactivo:{bg:"#fee2e2",c:"#dc2626"}};
   const s=map[val]||{bg:"#f3f4f6",c:GRL};
@@ -169,7 +177,8 @@ function Btn({onClick,children,danger,ghost,sm,disabled}){
   </button>;
 }
 function Logo({h=36}){
-  return <img src="https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png" alt="Grupo Tapatía" style={{height:h,objectFit:"contain",maxWidth:280}}/>;
+  return <img src={LOGO_URL} alt="Grupo Tapatía" style={{height:h,objectFit:"contain",maxWidth:280}}
+    onError={e=>{e.target.style.display="none";}}/>;
 }
 function Buscador({search,ds,onChange,count,mob}){
   const tipo=ds.trim().length>=2?detectTipo(ds.trim()):"";
@@ -200,91 +209,89 @@ function Pager({total,pg,setPg,ps=50}){
 }
 
 // ── PDF ───────────────────────────────────────────────────────
-async function generarPDF({folio, session, items, nota, vigencia, descuento, clienteNombre}){
-  const doc2 = new jsPDF({orientation:"portrait", unit:"mm", format:"a4"});
-  const W=210, M=15;
+async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNombre}){
+  // Sanitizar todo antes de tocar jsPDF
+  const sfolio    = safe(folio)||"S/F";
+  const snota     = safe(nota);
+  const svig      = safe(vigencia)||"7 días naturales";
+  const scliente  = safe(clienteNombre)||"Público en general";
+  const sdesc     = clampDesc(descuento);
+  const snombre   = safe(session?.nombre)||"—";
+  const sitems    = Array.isArray(items)?items:[];
+  const fecha     = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
 
-  // ── Header naranja ──
-  doc2.setFillColor(255,107,6);
-  doc2.rect(0,0,W,42,"F");
+  const doc2=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const W=210,M=15;
+
+  // Header naranja
+  doc2.setFillColor(255,107,6); doc2.rect(0,0,W,42,"F");
 
   // Logo imagen
-  const logoUrl="https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
   try {
-    const resp=await fetch(logoUrl);
+    const resp=await fetch(LOGO_URL);
     const blob=await resp.blob();
-    const b64=await new Promise(res=>{const r=new FileReader();r.onload=()=>res(r.result);r.readAsDataURL(blob);});
-    doc2.addImage(b64,"PNG",M,5,38,20);
+    const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
+    doc2.addImage(b64,"PNG",M,4,38,20);
   } catch(e){
-    // fallback texto si no carga imagen
-    doc2.setTextColor(255,255,255); doc2.setFontSize(18); doc2.setFont("helvetica","bold");
+    doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
     doc2.text("GRUPO TAPATÍA",M,16);
   }
 
-  // Tagline y contacto
-  doc2.setTextColor(255,255,255); doc2.setFontSize(7.5); doc2.setFont("helvetica","normal");
+  doc2.setTextColor(255,255,255);doc2.setFontSize(7.5);doc2.setFont("helvetica","normal");
   doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques",M,28);
   doc2.text("Tlaquepaque, Jalisco, México  |  ventas@llanteratapatia.com  |  www.tapatia.app",M,33);
 
-  // Etiqueta COTIZACIÓN (derecha)
-  doc2.setFillColor(210,75,0);
-  doc2.rect(138,0,72,42,"F");
-  doc2.setTextColor(255,255,255); doc2.setFontSize(16); doc2.setFont("helvetica","bold");
+  // Etiqueta cotización
+  doc2.setFillColor(210,75,0);doc2.rect(138,0,72,42,"F");
+  doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
   doc2.text("COTIZACIÓN",174,14,{align:"center"});
-  doc2.setFontSize(11);
-  doc2.text(folio,174,22,{align:"center"});
-  const fecha=new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
-  doc2.setFontSize(9); doc2.setFont("helvetica","normal");
-  doc2.text(fecha,174,29,{align:"center"});
+  doc2.setFontSize(11);doc2.text(sfolio,174,22,{align:"center"});
+  doc2.setFontSize(9);doc2.setFont("helvetica","normal");doc2.text(fecha,174,29,{align:"center"});
 
-  // ── Datos cotización ──
+  // Datos cotización
   let y=50;
-  doc2.setFillColor(245,245,245);
-  doc2.rect(M,y-4,W-M*2,26,"F");
-  doc2.setDrawColor(230,230,230); doc2.setLineWidth(0.3);
-  doc2.rect(M,y-4,W-M*2,26);
-  doc2.setTextColor(OR); doc2.setFont("helvetica","bold"); doc2.setFontSize(9);
-  doc2.text("DATOS DE COTIZACIÓN",M+2,y+1);
-  y+=6;
-  doc2.setTextColor(80,80,80); doc2.setFont("helvetica","normal"); doc2.setFontSize(8.5);
-  doc2.text("Folio:",M+2,y); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text(folio,M+18,y);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("Fecha:",100,y); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text(fecha,116,y);
-  y+=6;
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("Elaboró:",M+2,y); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text(session.nombre,M+20,y);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("Vigencia:",100,y); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text(vigencia||"7 días naturales",116,y);
-  y+=6;
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("Cliente:",M+2,y);
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30);
-  doc2.text(clienteNombre||"Público en general",M+20,y);
+  doc2.setFillColor(245,245,245);doc2.rect(M,y-4,W-M*2,26,"F");
+  doc2.setDrawColor(230,230,230);doc2.setLineWidth(0.3);doc2.rect(M,y-4,W-M*2,26);
+  doc2.setTextColor(OR);doc2.setFont("helvetica","bold");doc2.setFontSize(9);
+  doc2.text("DATOS DE COTIZACIÓN",M+2,y+1);y+=6;
 
-  // ── Clasificación IVA ──
-  const sinIva=items.filter(it=>!tieneIVA(it));
-  const conIva=items.filter(it=>tieneIVA(it));
-  const todosSinIva=conIva.length===0;
-  const todosConIva=sinIva.length===0;
+  const tf=(lbl,val,x1,x2)=>{
+    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.setFontSize(8.5);doc2.text(lbl,x1,y);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text(safe(val)||"—",x2,y);
+  };
+  tf("Folio:",sfolio,M+2,M+18);tf("Fecha:",fecha,100,116);y+=6;
+  tf("Elaboró:",snombre,M+2,M+20);tf("Vigencia:",svig,100,116);y+=6;
+  doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.setFontSize(8.5);doc2.text("Cliente:",M+2,y);
+  doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);
+  // Truncar cliente si es muy largo
+  const clienteTxt=doc2.splitTextToSize(scliente,100)[0]||scliente;
+  doc2.text(clienteTxt,M+20,y);
 
+  // Clasificación IVA
+  const conIvaItems=sitems.filter(it=>tieneIVA(it));
+  const sinIvaItems=sitems.filter(it=>!tieneIVA(it));
   y+=10;
-  if(todosSinIva){
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(220,38,38);
-    doc2.text("Productos sin IVA",M,y); y+=4;
-  } else if(todosConIva){
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(37,99,235);
-    doc2.text("Productos con IVA (16%)",M,y); y+=4;
+  if(conIvaItems.length===0){
+    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(220,38,38);
+    doc2.text("Productos sin IVA",M,y);
+  } else if(sinIvaItems.length===0){
+    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(37,99,235);
+    doc2.text("Productos con IVA (16%)",M,y);
   } else {
-    doc2.setFont("helvetica","bold"); doc2.setFontSize(8); doc2.setTextColor(80,80,80);
-    doc2.text("* Algunos productos no causan IVA (agrícolas). Ver detalle en tabla.",M,y); y+=4;
+    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(80,80,80);
+    doc2.text("* Productos sin IVA marcados con asterisco",M,y);
   }
+  y+=4;
 
-  // ── Tabla ──
-  const rows=items.map((it,i)=>{
-    const agr=esAgricola(it.descripcion);
-    return [
-      i+1, it.codigo, it.descripcion+(agr?" *":""),
-      it.cantidad,
-      money2(it.precio),
-      money2(it.precio*it.cantidad),
-    ];
-  });
+  // Tabla productos
+  const rows=sitems.map((it,i)=>[
+    i+1,
+    safe(it.codigo)||"—",
+    (safe(it.descripcion)||"—")+(tieneIVA(it)?"":" *"),
+    safeNum(it.cantidad),
+    money2(it.precio),
+    money2(safeNum(it.precio)*safeNum(it.cantidad)),
+  ]);
 
   doc2.autoTable({
     startY:y,
@@ -293,107 +300,82 @@ async function generarPDF({folio, session, items, nota, vigencia, descuento, cli
     margin:{left:M,right:M},
     headStyles:{fillColor:[255,107,6],textColor:255,fontStyle:"bold",fontSize:8,halign:"center"},
     bodyStyles:{fontSize:7.5,textColor:[40,40,40]},
-    columnStyles:{
-      0:{halign:"center",cellWidth:8},
-      1:{cellWidth:28},
-      2:{cellWidth:82},
-      3:{halign:"center",cellWidth:14},
-      4:{halign:"right",cellWidth:26},
-      5:{halign:"right",cellWidth:26},
-    },
+    columnStyles:{0:{halign:"center",cellWidth:8},1:{cellWidth:28},2:{cellWidth:82},3:{halign:"center",cellWidth:14},4:{halign:"right",cellWidth:26},5:{halign:"right",cellWidth:26}},
     alternateRowStyles:{fillColor:[250,250,250]},
     tableLineColor:[220,220,220],tableLineWidth:0.1,
-    didParseCell:(data)=>{
-      if(data.section==="body"&&data.column.index===2){
-        const txt=String(data.cell.raw||"");
-        if(txt.endsWith(" *")) data.cell.styles.textColor=[180,30,30];
-      }
-    }
+    didParseCell:data=>{if(data.section==="body"&&data.column.index===2&&safe(data.cell.raw).endsWith(" *"))data.cell.styles.textColor=[180,30,30];}
   });
 
-  // ── Totales ──
-  const subtotal=items.reduce((s,it)=>s+it.precio*it.cantidad,0);
-  const ivaTotal=conIva.reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
-  const descPct=Number(descuento)||0;
-  const descMonto=descPct>0?subtotal*(descPct/100):0;
+  // Totales
+  const subtotal=sitems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad),0);
+  const ivaTotal=conIvaItems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad)*0.16,0);
+  const descMonto=sdesc>0?subtotal*(sdesc/100):0;
   const total=subtotal+ivaTotal-descMonto;
 
   const fy=doc2.lastAutoTable.finalY+5;
-  const bx=118, bw=77;
-  const rowH=6.5;
-  let ty=fy;
+  const bx=118,bw=77;let ty=fy;
+  const numRows=sdesc>0?3:2;
+  doc2.setFillColor(248,248,248);doc2.rect(bx,ty-2,bw,numRows*6.5+4,"F");
+  doc2.setDrawColor(220,220,220);doc2.setLineWidth(0.2);doc2.rect(bx,ty-2,bw,numRows*6.5+4);
 
-  // fondo bloque totales
-  const numRows=descPct>0?3:2;
-  doc2.setFillColor(248,248,248); doc2.rect(bx,ty-2,bw,numRows*rowH+4,"F");
-  doc2.setDrawColor(220,220,220); doc2.setLineWidth(0.2); doc2.rect(bx,ty-2,bw,numRows*rowH+4);
+  const trow=(lbl,val,color)=>{
+    doc2.setFont("helvetica","normal");doc2.setFontSize(8.5);doc2.setTextColor(...(color||[80,80,80]));doc2.text(lbl,bx+2,ty+4);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(...(color||[30,30,30]));doc2.text(val,bx+bw-2,ty+4,{align:"right"});
+    ty+=6.5;
+  };
+  trow("Subtotal:",money2(subtotal));
+  trow("IVA:",money2(ivaTotal),ivaTotal===0?[180,180,180]:[37,99,235]);
+  if(sdesc>0) trow(`Descuento (${sdesc}%):`,"-"+money2(descMonto),[200,30,30]);
 
-  doc2.setFont("helvetica","normal"); doc2.setFontSize(8.5); doc2.setTextColor(80,80,80);
-  doc2.text("Subtotal:",bx+2,ty+4);
-  doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30);
-  doc2.text(money2(subtotal),bx+bw-2,ty+4,{align:"right"});
-  ty+=rowH;
-
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80);
-  doc2.text("IVA:",bx+2,ty+4);
-  doc2.setFont("helvetica","bold");
-  doc2.setTextColor(ivaTotal===0?[150,150,150]:[30,30,30]);
-  doc2.text(money2(ivaTotal),bx+bw-2,ty+4,{align:"right"});
-  ty+=rowH;
-
-  if(descPct>0){
-    doc2.setFont("helvetica","normal"); doc2.setTextColor(200,30,30);
-    doc2.text(`Descuento (${descPct}%):`,bx+2,ty+4);
-    doc2.setFont("helvetica","bold"); doc2.setTextColor(200,30,30);
-    doc2.text("-"+money2(descMonto),bx+bw-2,ty+4,{align:"right"});
-    ty+=rowH;
-  }
-
-  // línea y total
-  doc2.setDrawColor(255,107,6); doc2.setLineWidth(0.6);
-  doc2.line(bx,ty+2,bx+bw,ty+2);
-  doc2.setFillColor(255,107,6); doc2.rect(bx,ty+3,bw,9,"F");
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(11);
+  doc2.setDrawColor(255,107,6);doc2.setLineWidth(0.6);doc2.line(bx,ty+2,bx+bw,ty+2);
+  doc2.setFillColor(255,107,6);doc2.rect(bx,ty+3,bw,9,"F");
+  doc2.setTextColor(255,255,255);doc2.setFont("helvetica","bold");doc2.setFontSize(11);
   doc2.text("TOTAL:",bx+3,ty+9.5);
   doc2.text(money2(total),bx+bw-2,ty+9.5,{align:"right"});
 
-  // ── Notas ──
-  if(nota){
+  // Notas
+  if(snota){
     const ny=ty+18;
-    doc2.setTextColor(60,60,60); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
-    doc2.text("OBSERVACIONES:",M,ny);
-    doc2.setFont("helvetica","normal"); doc2.setFontSize(7.5);
-    doc2.text(doc2.splitTextToSize(nota,W-M*2-5),M,ny+5);
+    if(ny<265){
+      doc2.setTextColor(60,60,60);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
+      doc2.text("OBSERVACIONES:",M,ny);
+      doc2.setFont("helvetica","normal");doc2.setFontSize(7.5);
+      doc2.text(doc2.splitTextToSize(snota,W-M*2-5),M,ny+5);
+    }
   }
 
-  // ── Datos bancarios ──
-  const by=ty+20+(nota?12:0);
-  doc2.setFillColor(245,245,245); doc2.rect(M,by,W-M*2,20,"F");
-  doc2.setDrawColor(220,220,220); doc2.rect(M,by,W-M*2,20);
-  doc2.setTextColor(OR); doc2.setFont("helvetica","bold"); doc2.setFontSize(8);
-  doc2.text("DATOS PARA DEPÓSITO / TRANSFERENCIA",M+2,by+5);
-  doc2.setTextColor(80,80,80); doc2.setFont("helvetica","normal"); doc2.setFontSize(8);
-  doc2.text("Banco:",M+2,by+11); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text("BBVA",M+18,by+11);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("Titular:",100,by+11); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text("Comercial Llantera Tapatía SA de CV",118,by+11);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("No. Cuenta:",M+2,by+17); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text("0154483138",M+26,by+17);
-  doc2.setFont("helvetica","normal"); doc2.setTextColor(80,80,80); doc2.text("CLABE:",100,by+17); doc2.setFont("helvetica","bold"); doc2.setTextColor(30,30,30); doc2.text("012320001544831389",118,by+17);
+  // Datos bancarios
+  const by=ty+20+(snota?12:0);
+  if(by<268){
+    doc2.setFillColor(245,245,245);doc2.rect(M,by,W-M*2,20,"F");
+    doc2.setDrawColor(220,220,220);doc2.rect(M,by,W-M*2,20);
+    doc2.setTextColor(OR);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
+    doc2.text("DATOS PARA DEPÓSITO / TRANSFERENCIA",M+2,by+5);
+    doc2.setFontSize(7.5);
+    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("Banco:",M+2,by+11);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("BBVA",M+16,by+11);
+    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("Titular:",100,by+11);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("Comercial Llantera Tapatía SA de CV",118,by+11);
+    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("No. Cuenta:",M+2,by+17);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("0154483138",M+26,by+17);
+    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("CLABE:",100,by+17);
+    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("012320001544831389",118,by+17);
+  }
 
-  // ── Footer ──
-  const py=282;
-  doc2.setFillColor(255,107,6); doc2.rect(0,py,W,15,"F");
-  doc2.setTextColor(255,255,255); doc2.setFont("helvetica","bold"); doc2.setFontSize(7.5);
-  doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.",W/2,py+4,{align:"center"});
+  // Footer
+  doc2.setFillColor(255,107,6);doc2.rect(0,282,W,15,"F");
+  doc2.setTextColor(255,255,255);doc2.setFont("helvetica","bold");doc2.setFontSize(7.5);
+  doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.",W/2,286,{align:"center"});
   doc2.setFont("helvetica","normal");
-  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.",W/2,py+8,{align:"center"});
-  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`,W/2,py+13,{align:"center"});
+  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.",W/2,290,{align:"center"});
+  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`,W/2,294,{align:"center"});
 
-  doc2.save(`Cotizacion_${folio}.pdf`);
+  doc2.save(`Cotizacion_${sfolio}.pdf`);
 }
 
 // ── CartPanel ─────────────────────────────────────────────────
 function CartPanel({cart,setCart,session,db,onClose,mob}){
   const vend=isVendedor(session);
-  const canDiscount=vend;
   const [nota,setNota]=useState("");
   const [vigencia,setVigencia]=useState("7 días naturales");
   const [descuento,setDescuento]=useState(0);
@@ -401,68 +383,69 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
   const [generating,setGenerating]=useState(false);
   const [folioMsg,setFolioMsg]=useState("");
 
-  const subtotal=cart.reduce((s,it)=>s+it.precio*it.cantidad,0);
-  const ivaTotal=cart.filter(it=>tieneIVA(it)).reduce((s,it)=>s+it.precio*it.cantidad*0.16,0);
-
-  // Al agregar al carrito guardamos el campo iva del producto
-  const descMonto=canDiscount&&descuento>0?subtotal*(descuento/100):0;
+  const subtotal=cart.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad),0);
+  const ivaTotal=cart.filter(it=>tieneIVA(it)).reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad)*0.16,0);
+  const descPct=clampDesc(descuento);
+  const descMonto=vend&&descPct>0?subtotal*(descPct/100):0;
   const total=subtotal+ivaTotal-descMonto;
 
-  function updCantidad(idx,val){ const n=Math.max(1,parseInt(val)||1); setCart(prev=>prev.map((it,i)=>i===idx?{...it,cantidad:n}:it)); }
+  function updCantidad(idx,val){const n=Math.max(1,parseInt(val)||1);setCart(prev=>prev.map((it,i)=>i===idx?{...it,cantidad:n}:it));}
   function updPrecio(idx,tipo){
     setCart(prev=>prev.map((it,i)=>{
       if(i!==idx)return it;
       const p=tipo==="publico"?it._publico:tipo==="distribuidor"?it._distribuidor:it._asociado;
-      return{...it,precio:p,tipoPrecio:tipo};
+      return{...it,precio:safeNum(p),tipoPrecio:tipo};
     }));
   }
   function remove(idx){setCart(prev=>prev.filter((_,i)=>i!==idx));}
 
   async function getNextFolio(){
-    const uid=session.id||session.usuario;
+    const uid=safe(session?.id||session?.usuario)||"unknown";
     const ref=doc(db,"folios",uid);
     const snap=await getDoc(ref);
-    const current=snap.exists()?(snap.data().ultimo||0):0;
+    const current=snap.exists()?(safeNum(snap.data().ultimo)):0;
     const next=current+1;
-    await setDoc(ref,{ultimo:next,usuario:session.usuario,actualizado:new Date().toISOString()},{merge:true});
-    return`COT-${session.usuario.substring(0,3).toUpperCase()}-${String(next).padStart(4,"0")}`;
+    await setDoc(ref,{ultimo:next,usuario:safe(session?.usuario),actualizado:new Date().toISOString()},{merge:true});
+    const prefix=safe(session?.usuario).substring(0,3).toUpperCase()||"USR";
+    return`COT-${prefix}-${String(next).padStart(4,"0")}`;
   }
 
   async function generarCotizacion(){
     if(cart.length===0){setFolioMsg("❌ Agrega al menos un producto.");return;}
-    setGenerating(true); setFolioMsg("Generando folio...");
+    setGenerating(true);setFolioMsg("Generando folio...");
     try{
       const folio=await getNextFolio();
       setFolioMsg(`📄 ${folio} — generando PDF...`);
-      const descReal=canDiscount?Number(descuento)||0:0;
-      const nombreCliente=clienteNombre.trim()||"Público en general";
+      const descReal=vend?descPct:0;
+      const nombreCliente=safe(clienteNombre)||"Público en general";
       await generarPDF({folio,session,items:cart,nota,vigencia,descuento:descReal,clienteNombre:nombreCliente});
       await setDoc(doc(db,"cotizaciones",folio),{
-        folio,usuario:session.usuario,nombre:session.nombre,
-        empresa:session.empresa||"",items:cart,
+        folio,usuario:safe(session?.usuario),nombre:safe(session?.nombre),
+        empresa:safe(session?.empresa),items:cart,
         subtotal,ivaTotal,descuento:descReal,total,
-        clienteNombre:nombreCliente,nota,vigencia,
+        clienteNombre:nombreCliente,nota:safe(nota),vigencia:safe(vigencia),
         fecha:new Date().toISOString(),
       });
       setFolioMsg(`✅ ${folio} generada y guardada.`);
       setTimeout(()=>{setCart([]);onClose();},2000);
-    }catch(e){setFolioMsg("❌ Error: "+e.message);}
+    }catch(e){
+      console.error("Error generarCotizacion:",e);
+      setFolioMsg("❌ Error: "+safe(e.message));
+    }
     setGenerating(false);
   }
 
   return(
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:2000,display:"flex",justifyContent:"flex-end",fontFamily:"Arial,sans-serif"}}>
       <div style={{width:"100%",maxWidth:520,background:"#fff",height:"100%",display:"flex",flexDirection:"column",boxShadow:"-4px 0 24px rgba(0,0,0,0.15)"}}>
-        {/* Header */}
-        <div style={{background:OR,padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+        <div style={{background:OR,padding:"14px 20px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
           <div>
             <div style={{color:"#fff",fontWeight:700,fontSize:15,letterSpacing:1}}>🧾 COTIZACIÓN</div>
-            <div style={{color:"rgba(255,255,255,0.8)",fontSize:11}}>{cart.length} producto{cart.length!==1?"s":""} · {money2(total)}</div>
+            <div style={{color:"rgba(255,255,255,0.85)",fontSize:11}}>{cart.length} producto{cart.length!==1?"s":""} · {money2(total)}</div>
           </div>
           <button onClick={onClose} style={{background:"rgba(255,255,255,0.2)",border:"none",color:"#fff",width:32,height:32,borderRadius:"50%",cursor:"pointer",fontSize:16,fontWeight:700}}>✕</button>
         </div>
 
-        {/* Productos */}
         <div style={{flex:1,overflowY:"auto",padding:16}}>
           {cart.length===0&&<div style={{textAlign:"center",color:GRL,padding:40,fontSize:13}}>
             Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo
@@ -499,7 +482,7 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
                   )}
                   <div style={{marginLeft:"auto",textAlign:"right"}}>
                     <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#1a1a1a"}}>{money2(it.precio)}</strong></div>
-                    <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(it.precio*it.cantidad)}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(safeNum(it.precio)*safeNum(it.cantidad))}</div>
                   </div>
                 </div>
               </div>
@@ -507,16 +490,12 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
           })}
         </div>
 
-        {/* Footer */}
-        <div style={{borderTop:"1px solid #e5e7eb",padding:16,background:"#f9f9f9"}}>
-          {/* A quién se cotiza */}
+        <div style={{borderTop:"1px solid #e5e7eb",padding:16,background:"#f9f9f9",flexShrink:0}}>
           <div style={{marginBottom:10}}>
             <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>A QUIÉN SE COTIZA</div>
-            <input value={clienteNombre} onChange={e=>setClienteNombre(e.target.value)}
-              placeholder="Público en general"
+            <input value={clienteNombre} onChange={e=>setClienteNombre(e.target.value)} placeholder="Público en general"
               style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,outline:"none",background:"#fff",boxSizing:"border-box"}}/>
           </div>
-          {/* Vigencia */}
           <div style={{marginBottom:10}}>
             <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>VIGENCIA</div>
             <select value={vigencia} onChange={e=>setVigencia(e.target.value)}
@@ -527,16 +506,15 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
               <option>Sujeto a disponibilidad</option>
             </select>
           </div>
-          {/* Descuento — solo vendedor/admin */}
-          {canDiscount&&(
+          {/* Descuento solo vendedor/admin — enteros 0-30 */}
+          {vend&&(
             <div style={{marginBottom:10}}>
-              <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>DESCUENTO ADICIONAL %</div>
-              <input type="number" min="0" max="50" value={descuento}
-                onChange={e=>setDescuento(Math.min(50,Math.max(0,Number(e.target.value)||0)))}
+              <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>DESCUENTO ADICIONAL % (0–30)</div>
+              <input type="number" min="0" max="30" step="1" value={descuento}
+                onChange={e=>setDescuento(clampDesc(e.target.value))}
                 style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,outline:"none",background:"#fff",boxSizing:"border-box"}}/>
             </div>
           )}
-          {/* Notas */}
           <div style={{marginBottom:12}}>
             <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>OBSERVACIONES</div>
             <textarea value={nota} onChange={e=>setNota(e.target.value)} rows={2}
@@ -546,13 +524,13 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
           {/* Resumen */}
           <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,padding:"10px 12px",marginBottom:12,fontSize:12}}>
             <div style={{display:"flex",justifyContent:"space-between",color:GRL,marginBottom:3}}>
-              <span>Subtotal:</span><span>{money2(subtotal)}</span>
+              <span>Subtotal:</span><span style={{color:"#1a1a1a",fontWeight:600}}>{money2(subtotal)}</span>
             </div>
-            <div style={{display:"flex",justifyContent:"space-between",color:ivaTotal===0?"#9ca3af":"#2563eb",marginBottom:3}}>
-              <span>IVA (16%):</span><span>{money2(ivaTotal)}</span>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3,color:ivaTotal===0?"#9ca3af":"#2563eb"}}>
+              <span>IVA (16%):</span><span style={{fontWeight:600}}>{money2(ivaTotal)}</span>
             </div>
-            {canDiscount&&descuento>0&&<div style={{display:"flex",justifyContent:"space-between",color:"#dc2626",marginBottom:3}}>
-              <span>Descuento ({descuento}%):</span><span>-{money2(descMonto)}</span>
+            {vend&&descPct>0&&<div style={{display:"flex",justifyContent:"space-between",color:"#dc2626",marginBottom:3}}>
+              <span>Descuento ({descPct}%):</span><span style={{fontWeight:600}}>-{money2(descMonto)}</span>
             </div>}
             <div style={{display:"flex",justifyContent:"space-between",fontWeight:700,fontSize:15,color:OR,borderTop:"1px solid #e5e7eb",paddingTop:6,marginTop:4}}>
               <span>TOTAL:</span><span>{money2(total)}</span>
@@ -565,7 +543,7 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
           <button onClick={generarCotizacion} disabled={generating||cart.length===0}
             style={{width:"100%",padding:"13px",background:cart.length===0?"#e5e7eb":OR,color:cart.length===0?GRL:"#fff",
               border:"none",borderRadius:4,cursor:cart.length===0?"not-allowed":"pointer",fontWeight:700,fontSize:14,letterSpacing:1,opacity:generating?0.7:1}}>
-            {generating?"GENERANDO...":"📄 GENERAR COTIZACIÓN PDF"}
+            {generating?"⏳ GENERANDO...":"📄 GENERAR COTIZACIÓN PDF"}
           </button>
         </div>
       </div>
@@ -573,47 +551,49 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
   );
 }
 
-// ── Historial de cotizaciones ─────────────────────────────────
+// ── Historial ─────────────────────────────────────────────────
 function HistorialCotizaciones({session,db,mob}){
-  const [cotizaciones,setCotizaciones]=useState([]);
+  const [cots,setCots]=useState([]);
   const [loading,setLoading]=useState(true);
   const [expanded,setExpanded]=useState(null);
   const admin=isAdminRole(session);
 
   useEffect(()=>{
+    let mounted=true;
     (async()=>{
       setLoading(true);
-      const data=await fbGetCotizaciones(session.usuario,admin);
-      if(data!==null) setCotizaciones(data);
-      setLoading(false);
+      const data=await fbGetCotizaciones(session?.usuario,admin);
+      if(mounted&&data!==null) setCots(data);
+      if(mounted) setLoading(false);
     })();
+    return()=>{mounted=false;};
   },[]);
 
   async function reimprimir(cot){
-    await generarPDF({
-      folio:cot.folio,
-      session:{nombre:cot.nombre,empresa:cot.empresa},
-      items:cot.items||[],
-      nota:cot.nota||"",
-      vigencia:cot.vigencia||"7 días naturales",
-      descuento:cot.descuento||0,
-      clienteNombre:cot.clienteNombre||"Público en general",
-    });
+    try{
+      await generarPDF({
+        folio:cot.folio,
+        session:{nombre:cot.nombre,empresa:cot.empresa},
+        items:cot.items||[],nota:cot.nota||"",
+        vigencia:cot.vigencia||"7 días naturales",
+        descuento:cot.descuento||0,
+        clienteNombre:cot.clienteNombre||"Público en general",
+      });
+    }catch(e){alert("Error al reimprimir: "+safe(e.message));}
   }
 
   if(loading) return <div style={{textAlign:"center",padding:40,color:GRL}}>Cargando historial...</div>;
-  if(cotizaciones.length===0) return(
+  if(cots.length===0) return(
     <div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
       <div style={{fontSize:40,marginBottom:12}}>📋</div>
       <div style={{fontSize:14,fontWeight:600}}>Sin cotizaciones aún</div>
-      <div style={{fontSize:12,marginTop:6}}>Las cotizaciones generadas aparecerán aquí</div>
     </div>
   );
 
   return(
     <div>
-      <div style={{marginBottom:12,color:GRL,fontSize:11}}>{cotizaciones.length} cotización{cotizaciones.length!==1?"es":""}</div>
-      {cotizaciones.map(cot=>{
+      <div style={{marginBottom:12,color:GRL,fontSize:11}}>{cots.length} cotización{cots.length!==1?"es":""}</div>
+      {cots.map(cot=>{
         const open=expanded===cot.folio;
         return(
           <div key={cot.folio} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:8,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
@@ -624,15 +604,15 @@ function HistorialCotizaciones({session,db,mob}){
                   {admin&&<span style={{fontSize:11,color:GRL}}>· {cot.nombre}{cot.empresa?` (${cot.empresa})`:""}</span>}
                 </div>
                 <div style={{display:"flex",gap:12,marginTop:3,flexWrap:"wrap"}}>
-                  <span style={{fontSize:11,color:GRL}}>{new Date(cot.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"})}</span>
-                  <span style={{fontSize:11,fontWeight:600,color:"#1a1a1a"}}>{money2(cot.total||cot.subtotal)}</span>
+                  <span style={{fontSize:11,color:GRL}}>{cot.fecha?new Date(cot.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):""}</span>
+                  <span style={{fontSize:11,fontWeight:600,color:"#1a1a1a"}}>{money2(cot.total??cot.subtotal)}</span>
                   {cot.clienteNombre&&<span style={{fontSize:11,color:GRL}}>→ {cot.clienteNombre}</span>}
                 </div>
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
                 <button onClick={e=>{e.stopPropagation();reimprimir(cot);}}
                   style={{background:OR,color:"#fff",border:"none",padding:"6px 12px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>📄 PDF</button>
-                <span style={{color:GRL,fontSize:16,transform:open?"rotate(180deg)":"rotate(0)",transition:"transform 0.2s"}}>▾</span>
+                <span style={{color:GRL,fontSize:16,transform:open?"rotate(180deg)":"none",transition:"transform 0.2s"}}>▾</span>
               </div>
             </div>
             {open&&(
@@ -646,14 +626,14 @@ function HistorialCotizaciones({session,db,mob}){
                     <td style={{padding:"5px 10px"}}>{it.descripcion}</td>
                     <td style={{padding:"5px 10px",textAlign:"right"}}>{it.cantidad}</td>
                     <td style={{padding:"5px 10px",textAlign:"right"}}>{money2(it.precio)}</td>
-                    <td style={{padding:"5px 10px",textAlign:"right",fontWeight:600,color:OR}}>{money2(it.precio*it.cantidad)}</td>
+                    <td style={{padding:"5px 10px",textAlign:"right",fontWeight:600,color:OR}}>{money2(safeNum(it.precio)*safeNum(it.cantidad))}</td>
                   </tr>)}</tbody>
                 </table>
                 <div style={{display:"flex",justifyContent:"flex-end",gap:16,marginTop:10,paddingTop:8,borderTop:"1px solid #e5e7eb",flexWrap:"wrap",fontSize:12}}>
                   <span style={{color:GRL}}>Subtotal: <strong>{money2(cot.subtotal)}</strong></span>
-                  {(cot.ivaTotal||0)>0&&<span style={{color:"#2563eb"}}>IVA: <strong>{money2(cot.ivaTotal)}</strong></span>}
-                  {(cot.descuento||0)>0&&<span style={{color:"#dc2626"}}>Desc. ({cot.descuento}%): <strong>-{money2(cot.subtotal*(cot.descuento/100))}</strong></span>}
-                  <span style={{fontWeight:700,color:OR}}>Total: {money2(cot.total||cot.subtotal)}</span>
+                  {safeNum(cot.ivaTotal)>0&&<span style={{color:"#2563eb"}}>IVA: <strong>{money2(cot.ivaTotal)}</strong></span>}
+                  {safeNum(cot.descuento)>0&&<span style={{color:"#dc2626"}}>Desc. ({cot.descuento}%): <strong>-{money2(safeNum(cot.subtotal)*(safeNum(cot.descuento)/100))}</strong></span>}
+                  <span style={{fontWeight:700,color:OR}}>Total: {money2(cot.total??cot.subtotal)}</span>
                 </div>
                 {cot.nota&&<div style={{marginTop:6,fontSize:11,color:GRL}}><strong>Nota:</strong> {cot.nota}</div>}
               </div>
@@ -674,7 +654,12 @@ function PassCell({uid,db,hashPassword}){
     if(!newPass.trim()){setMsg("❌ Escribe una contraseña");return;}
     if(newPass.trim().length<3){setMsg("❌ Mínimo 3 caracteres");return;}
     setSaving(true);setMsg("");
-    try{const hash=await hashPassword(newPass.trim());await setDoc(doc(db,"usuarios",uid),{password:hash,actualizado:new Date().toISOString()},{merge:true});setPlain(newPass.trim());setNewPass("");setEditing(false);setMsg("✅ Guardada");setTimeout(()=>setMsg(""),3000);}catch(e){setMsg("❌ "+e.message);}
+    try{
+      const hash=await hashPassword(newPass.trim());
+      await setDoc(doc(db,"usuarios",uid),{password:hash,actualizado:new Date().toISOString()},{merge:true});
+      setPlain(newPass.trim());setNewPass("");setEditing(false);
+      setMsg("✅ Guardada");setTimeout(()=>setMsg(""),3000);
+    }catch(e){setMsg("❌ "+safe(e.message));}
     setSaving(false);
   }
   if(editing) return(
@@ -699,36 +684,35 @@ function PassCell({uid,db,hashPassword}){
 
 // ── ChangePassword ────────────────────────────────────────────
 function ChangePassword({session,db,hashPassword,checkPassword}){
-  const [actual,setActual]=useState("");const [nueva,setNueva]=useState("");const [confirmar,setConfirmar]=useState("");
+  const [actual,setActual]=useState("");const [nueva,setNueva]=useState("");const [conf,setConf]=useState("");
   const [msg,setMsg]=useState("");const [loading,setLoading]=useState(false);
   async function cambiar(){
-    if(!actual||!nueva||!confirmar){setMsg("❌ Completa todos los campos.");return;}
-    if(nueva!==confirmar){setMsg("❌ Las contraseñas nuevas no coinciden.");return;}
+    if(!actual||!nueva||!conf){setMsg("❌ Completa todos los campos.");return;}
+    if(nueva!==conf){setMsg("❌ Las contraseñas no coinciden.");return;}
     if(nueva.length<4){setMsg("❌ Mínimo 4 caracteres.");return;}
     setLoading(true);setMsg("");
     try{
       const snap=await getDocs(collection(db,"usuarios"));
-      const adminDoc=snap.docs.find(d=>d.data().usuario===session.usuario);
-      if(!adminDoc){setMsg("❌ No se encontró tu usuario.");setLoading(false);return;}
-      const ok=await checkPassword(actual,adminDoc.data().password);
-      if(!ok){setMsg("❌ Contraseña actual incorrecta.");setLoading(false);return;}
+      const d=snap.docs.find(d=>d.data().usuario===session?.usuario);
+      if(!d){setMsg("❌ Usuario no encontrado.");setLoading(false);return;}
+      if(!await checkPassword(actual,d.data().password)){setMsg("❌ Contraseña actual incorrecta.");setLoading(false);return;}
       const hash=await hashPassword(nueva);
-      await setDoc(doc(db,"usuarios",adminDoc.id),{password:hash,actualizado:new Date().toISOString()},{merge:true});
+      await setDoc(doc(db,"usuarios",d.id),{password:hash,actualizado:new Date().toISOString()},{merge:true});
       localStorage.setItem("gt_session",JSON.stringify({...session,password:hash}));
-      setMsg("✅ Contraseña cambiada.");setActual("");setNueva("");setConfirmar("");
-    }catch(e){setMsg("❌ Error: "+e.message);}
+      setMsg("✅ Contraseña cambiada.");setActual("");setNueva("");setConf("");
+    }catch(e){setMsg("❌ "+safe(e.message));}
     setLoading(false);
   }
   return <div>
     <div style={{display:"grid",gap:10}}>
-      {[["CONTRASEÑA ACTUAL",actual,setActual],["CONTRASEÑA NUEVA",nueva,setNueva],["CONFIRMAR",confirmar,setConfirmar]].map(([lbl,val,set])=>(
+      {[["CONTRASEÑA ACTUAL",actual,setActual],["CONTRASEÑA NUEVA",nueva,setNueva],["CONFIRMAR",conf,setConf]].map(([lbl,val,set])=>(
         <div key={lbl}><div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>{lbl}</div>
           <input type="password" value={val} onChange={e=>set(e.target.value)} style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
         </div>
       ))}
     </div>
     {msg&&<div style={{marginTop:10,fontSize:12,color:msg.startsWith("✅")?"#16a34a":"#dc2626",fontWeight:600}}>{msg}</div>}
-    <button onClick={cambiar} disabled={loading} style={{marginTop:14,background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,letterSpacing:1,opacity:loading?0.7:1}}>
+    <button onClick={cambiar} disabled={loading} style={{marginTop:14,background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,opacity:loading?0.7:1}}>
       {loading?"GUARDANDO...":"CAMBIAR CONTRASEÑA"}
     </button>
   </div>;
@@ -748,9 +732,13 @@ function CreateAdmin({session,db,hashPassword}){
       const snap=await getDocs(collection(db,"usuarios"));
       if(snap.docs.find(d=>d.data().usuario===form.usuario.trim())){setMsg("❌ Ya existe ese usuario.");setLoading(false);return;}
       const hash=await hashPassword(form.password);
-      await setDoc(doc(db,"usuarios","admin_"+Date.now()),{nombre:form.nombre.trim(),usuario:form.usuario.trim(),password:hash,rol:"admin",lista:"PUBLICO",estatus:"activo",empresa:"Grupo Tapatía",creado_por:session.nombre,creado_en:new Date().toISOString(),actualizado:new Date().toISOString()});
+      await setDoc(doc(db,"usuarios","admin_"+Date.now()),{
+        nombre:form.nombre.trim(),usuario:form.usuario.trim(),password:hash,
+        rol:"admin",lista:"PUBLICO",estatus:"activo",empresa:"Grupo Tapatía",
+        creado_por:safe(session?.nombre),creado_en:new Date().toISOString(),actualizado:new Date().toISOString()
+      });
       setMsg("✅ Admin '"+form.usuario+"' creado.");setForm({nombre:"",usuario:"",password:"",confirmar:""});
-    }catch(e){setMsg("❌ Error: "+e.message);}
+    }catch(e){setMsg("❌ "+safe(e.message));}
     setLoading(false);
   }
   return <div>
@@ -764,7 +752,7 @@ function CreateAdmin({session,db,hashPassword}){
       ))}
     </div>
     {msg&&<div style={{fontSize:12,color:msg.startsWith("✅")?"#16a34a":"#dc2626",fontWeight:600,marginBottom:10}}>{msg}</div>}
-    <button onClick={crear} disabled={loading} style={{background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,letterSpacing:1,opacity:loading?0.7:1}}>
+    <button onClick={crear} disabled={loading} style={{background:OR,color:"#fff",border:"none",padding:"10px 20px",borderRadius:4,cursor:loading?"wait":"pointer",fontWeight:700,fontSize:12,opacity:loading?0.7:1}}>
       {loading?"CREANDO...":"CREAR ADMINISTRADOR"}
     </button>
   </div>;
@@ -775,7 +763,7 @@ function CreateAdmin({session,db,hashPassword}){
 // ════════════════════════════════════════════════════════════
 export default function App(){
   const [session,setSession]=useState(()=>{try{const s=localStorage.getItem("gt_session");return s?JSON.parse(s):null;}catch(e){return null;}});
-  const [view,setView]=useState(()=>{try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return u.rol==="admin"||u.rol==="superadmin"?"admin":"client";}}catch(e){}return "login";});
+  const [view,setView]=useState(()=>{try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return isAdminRole(u)?"admin":"client";}}catch(e){}return "login";});
   const [tab,setTab]=useState("products");
   const [users,setUsers]=useState([]);
   const [products,setProducts]=useState([]);
@@ -802,26 +790,30 @@ export default function App(){
     dbRef.current=setTimeout(()=>{setDs(search);setPage(0);},300);
     return()=>{if(dbRef.current)clearTimeout(dbRef.current);};
   },[search]);
-
-  // Carga inicial solo si ya había sesión (refresh)
+  // Carga inicial solo si ya había sesión (refresh de página)
   useEffect(()=>{
     if(session){loadProducts();if(isAdminRole(session))loadUsers();}
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  async function loadProducts(){setProdLoad(true);const data=await fbGetProductos();if(data!==null)setProducts(data);setProdLoad(false);}
-  async function loadUsers(){setUserLoad(true);const data=await fbGetUsuarios();if(data!==null)setUsers(data);setUserLoad(false);}
+  async function loadProducts(){setProdLoad(true);const d=await fbGetProductos();if(d!==null)setProducts(d);setProdLoad(false);}
+  async function loadUsers(){setUserLoad(true);const d=await fbGetUsuarios();if(d!==null)setUsers(d);setUserLoad(false);}
 
   // ── addToCart ─────────────────────────────────────────────
   function addToCart(p){
-    const lista=session?.lista;
+    const lista=safe(session?.lista).toUpperCase();
     const vend=isVendedor(session);
     const tipoPrecio=vend?"publico":lista==="DISTRIBUIDOR"?"distribuidor":lista==="ASOCIADO"?"asociado":"publico";
-    const precio=tipoPrecio==="publico"?Number(p.publico)||0:tipoPrecio==="distribuidor"?Number(p.distribuidor)||0:Number(p.asociado)||0;
+    const precio=tipoPrecio==="publico"?safeNum(p.publico):tipoPrecio==="distribuidor"?safeNum(p.distribuidor):safeNum(p.asociado);
     setCart(prev=>{
       const idx=prev.findIndex(it=>it.codigo===p.codigo);
       if(idx>=0) return prev.map((it,i)=>i===idx?{...it,cantidad:it.cantidad+1}:it);
-      return [...prev,{codigo:p.codigo,descripcion:p.descripcion,iva:p.iva||"0",precio,tipoPrecio,cantidad:1,_publico:Number(p.publico)||0,_distribuidor:Number(p.distribuidor)||0,_asociado:Number(p.asociado)||0}];
+      return [...prev,{
+        codigo:safe(p.codigo),descripcion:safe(p.descripcion),
+        iva:safe(p.iva??p.IVA??"0"),
+        precio,tipoPrecio,cantidad:1,
+        _publico:safeNum(p.publico),_distribuidor:safeNum(p.distribuidor),_asociado:safeNum(p.asociado),
+      }];
     });
   }
 
@@ -831,23 +823,21 @@ export default function App(){
     try{
       const data=await fbGetUsuarios();
       if(data===null){setLerr("Error de conexión. Intenta de nuevo.");setLoginLoad(false);return;}
-      const u=data.find(u=>u.usuario===lu.trim());
+      const u=data.find(u=>safe(u.usuario)===safe(lu));
       if(!u){setLerr("Usuario o contraseña incorrectos");setLoginLoad(false);return;}
-      const ok=await checkPassword(lp.trim(),u.password);
-      if(!ok){setLerr("Usuario o contraseña incorrectos");setLoginLoad(false);return;}
+      if(!await checkPassword(safe(lp),safe(u.password))){setLerr("Usuario o contraseña incorrectos");setLoginLoad(false);return;}
       if(u.estatus==="inactivo"){setLerr("Cuenta inactiva. Contacta al administrador.");setLoginLoad(false);return;}
-      setSession(u);
-      localStorage.setItem("gt_session",JSON.stringify(u));
-      setView(u.rol==="admin"||u.rol==="superadmin"?"admin":"client");
+      setSession(u);localStorage.setItem("gt_session",JSON.stringify(u));
+      setView(isAdminRole(u)?"admin":"client");
       setLu("");setLp("");
-      // Cargar datos inmediatamente tras login — evita pantalla blanca
-      const prodData=await fbGetProductos();if(prodData!==null)setProducts(prodData);
-      if(u.rol==="admin"||u.rol==="superadmin"){const userData=await fbGetUsuarios();if(userData!==null)setUsers(userData);}
-    }catch(e){setLerr("Error: "+e.message);}
+      // Cargar datos inmediatamente — evita pantalla blanca
+      const pd=await fbGetProductos();if(pd!==null)setProducts(pd);
+      if(isAdminRole(u)){const ud=await fbGetUsuarios();if(ud!==null)setUsers(ud);}
+    }catch(e){setLerr("Error: "+safe(e.message));}
     setLoginLoad(false);
   }
 
-  function doLogout(){setSession(null);setView("login");setSearch("");setDs("");setPage(0);setProducts([]);setUsers([]);localStorage.removeItem("gt_session");}
+  function doLogout(){setSession(null);setView("login");setSearch("");setDs("");setPage(0);setProducts([]);setUsers([]);setCart([]);localStorage.removeItem("gt_session");}
 
   // ── Subir CSV ─────────────────────────────────────────────
   async function handleFile(e){
@@ -860,11 +850,14 @@ export default function App(){
         const rows=parseCsv(ev.target.result);
         if(rows.length===0){setMsg("❌ No se encontró columna CÓDIGO.");return;}
         const mapped=rows.map(r=>({
-          codigo:String(r.CODIGO||r["CÓDIGO"]||"").trim(),
-          descripcion:String(r.DESCRIPCION||r["DESCRIPCIÓN"]||"").trim(),
-          gdl1:Number(r.GDL1||0),gdl3:Number(r.GDL3||0),ags:Number(r.AGS||0),col:Number(r.COL||0),len:Number(r.LEN||0),cul:Number(r.CUL||0),
-          publico:Number(r.PUBLICO||r["PÚBLICO"]||0),distribuidor:Number(r.DISTRIBUIDOR||0),asociado:Number(r.ASOCIADO||0),
-          iva:String(r.IVA||r["iva"]||"0").trim(),
+          codigo:safe(r.CODIGO??r["CÓDIGO"]??r.codigo??""),
+          descripcion:safe(r.DESCRIPCION??r["DESCRIPCIÓN"]??r.descripcion??""),
+          gdl1:safeNum(r.GDL1),gdl3:safeNum(r.GDL3),ags:safeNum(r.AGS),
+          col:safeNum(r.COL),len:safeNum(r.LEN),cul:safeNum(r.CUL),
+          publico:safeNum(r.PUBLICO??r["PÚBLICO"]),
+          distribuidor:safeNum(r.DISTRIBUIDOR),
+          asociado:safeNum(r.ASOCIADO),
+          iva:safe(r.IVA??r.iva??"0"),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.codigo);
         if(mapped.length===0){setMsg("❌ No hay productos válidos.");return;}
@@ -884,9 +877,9 @@ export default function App(){
         }
         const verify=await getDocs(collection(db,"productos"));
         if(verify.size===0){setMsg("❌ ERROR: No se guardaron. Revisa Firebase.");return;}
-        await setDoc(doc(db,"bitacora",`carga_${Date.now()}`),{tipo:"carga_productos",por:session.nombre,cantidad:mapped.length,fecha:new Date().toISOString()});
+        await setDoc(doc(db,"bitacora",`carga_${Date.now()}`),{tipo:"carga_productos",por:safe(session?.nombre),cantidad:mapped.length,fecha:new Date().toISOString()});
         await loadProducts();setMsg(`✅ ${mapped.length} productos guardados.`);
-      }catch(err){setMsg("❌ ERROR: "+err.message);}
+      }catch(err){console.error("handleFile:",err);setMsg("❌ ERROR: "+safe(err.message));}
     };
     reader.readAsText(file,"UTF-8");
   }
@@ -895,29 +888,34 @@ export default function App(){
   async function saveClient(form){
     setSaving(true);
     try{
-      if(!form.nombre?.trim()||!form.usuario?.trim()){alert("Nombre y usuario son obligatorios.");setSaving(false);return;}
-      if(!form.id&&!form.password?.trim()){alert("La contraseña es obligatoria para usuarios nuevos.");setSaving(false);return;}
-      if(!form.id&&users.find(u=>u.usuario.trim()===form.usuario.trim())){alert("Ya existe ese usuario.");setSaving(false);return;}
+      if(!safe(form.nombre)||!safe(form.usuario)){alert("Nombre y usuario son obligatorios.");setSaving(false);return;}
+      if(!form.id&&!safe(form.password)){alert("La contraseña es obligatoria para usuarios nuevos.");setSaving(false);return;}
+      if(!form.id&&users.find(u=>safe(u.usuario)===safe(form.usuario))){alert("Ya existe ese usuario.");setSaving(false);return;}
       const id=form.id||"u_"+Date.now();
-      const data={nombre:form.nombre.trim(),empresa:(form.empresa||"").trim(),usuario:form.usuario.trim(),lista:form.lista,estatus:form.estatus,rol:"client",actualizado:new Date().toISOString()};
+      const data={nombre:safe(form.nombre),empresa:safe(form.empresa),usuario:safe(form.usuario),lista:safe(form.lista),estatus:safe(form.estatus),rol:"client",actualizado:new Date().toISOString()};
       if(!form.id)data.creado_en=new Date().toISOString();
-      if(form.password?.trim())data.password=await hashPassword(form.password.trim());
+      if(safe(form.password))data.password=await hashPassword(safe(form.password));
       await setDoc(doc(db,"usuarios",id),data,{merge:true});
       const verify=await getDoc(doc(db,"usuarios",id));
       if(!verify.exists()){alert("❌ No se guardó. Intenta de nuevo.");setSaving(false);return;}
-      await setDoc(doc(db,"bitacora",`u_${Date.now()}`),{tipo:form.id?"edicion_usuario":"nuevo_usuario",usuario:form.usuario.trim(),por:session.nombre,fecha:new Date().toISOString()});
+      await setDoc(doc(db,"bitacora",`u_${Date.now()}`),{tipo:form.id?"edicion_usuario":"nuevo_usuario",usuario:safe(form.usuario),por:safe(session?.nombre),fecha:new Date().toISOString()});
       await loadUsers();setModal(null);
-    }catch(err){alert("❌ Error: "+err.message);}
+    }catch(err){alert("❌ Error: "+safe(err.message));}
     setSaving(false);
   }
 
   async function toggleEstatus(id,est){
-    try{await setDoc(doc(db,"usuarios",id),{estatus:est==="activo"?"inactivo":"activo",actualizado:new Date().toISOString()},{merge:true});setUsers(prev=>prev.map(u=>u.id===id?{...u,estatus:est==="activo"?"inactivo":"activo"}:u));}catch(err){alert("❌ Error: "+err.message);}
+    try{await setDoc(doc(db,"usuarios",id),{estatus:est==="activo"?"inactivo":"activo",actualizado:new Date().toISOString()},{merge:true});
+      setUsers(prev=>prev.map(u=>u.id===id?{...u,estatus:est==="activo"?"inactivo":"activo"}:u));
+    }catch(err){alert("❌ Error: "+safe(err.message));}
   }
   async function deleteClient(id,nombre,rol){
     if(rol==="admin"&&users.filter(u=>u.rol==="admin").length<=1){alert("❌ No puedes eliminar el único administrador.");return;}
-    if(!window.confirm(`¿Eliminar a ${nombre}?`))return;
-    try{await deleteDoc(doc(db,"usuarios",id));await setDoc(doc(db,"bitacora",`del_${Date.now()}`),{tipo:"eliminacion_usuario",usuario_id:id,usuario_nombre:nombre,por:session.nombre,fecha:new Date().toISOString()});setUsers(prev=>prev.filter(u=>u.id!==id));}catch(err){alert("❌ Error: "+err.message);}
+    if(!window.confirm(`¿Eliminar a ${nombre}? Esta acción no se puede deshacer.`))return;
+    try{await deleteDoc(doc(db,"usuarios",id));
+      await setDoc(doc(db,"bitacora",`del_${Date.now()}`),{tipo:"eliminacion_usuario",usuario_id:id,usuario_nombre:safe(nombre),por:safe(session?.nombre),fecha:new Date().toISOString()});
+      setUsers(prev=>prev.filter(u=>u.id!==id));
+    }catch(err){alert("❌ Error: "+safe(err.message));}
   }
 
   const filtered=useMemo(()=>{
@@ -1018,8 +1016,8 @@ export default function App(){
           <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
             <div style={{flex:1,minWidth:180}}>
               <div style={{fontWeight:700,fontSize:12,marginBottom:3}}>ACTUALIZAR CATÁLOGO</div>
-              <div style={{color:GRL,fontSize:11}}>CSV — Excel: Archivo → Guardar como → CSV UTF-8</div>
-              <div style={{color:"#bbb",fontSize:10,marginTop:2}}>Columnas: CODIGO, DESCRIPCION, GDL1, GDL3, AGS, COL, LEN, CUL, PUBLICO, DISTRIBUIDOR, ASOCIADO</div>
+              <div style={{color:GRL,fontSize:11}}>CSV UTF-8 — Columnas requeridas:</div>
+              <div style={{color:"#bbb",fontSize:10,marginTop:2}}>CODIGO, DESCRIPCION, GDL1, GDL3, AGS, COL, LEN, CUL, PUBLICO, DISTRIBUIDOR, ASOCIADO, IVA</div>
             </div>
             <input type="file" accept=".csv,.tsv,.txt" ref={fref} onChange={handleFile} style={{display:"none"}}/>
             <Btn onClick={()=>{setMsg("");fref.current.click();}}>SUBIR CSV</Btn>
@@ -1038,6 +1036,7 @@ export default function App(){
                 <th style={{padding:"8px 10px",textAlign:"left",color:OR,fontWeight:700}}>DESCRIPCIÓN</th>
                 <th style={{padding:"8px 6px",textAlign:"right",color:OR,fontWeight:700}}>STOCK</th>
                 {!mob&&ALMS_L.map(a=><th key={a} style={{padding:"8px 5px",textAlign:"right",color:GRL,whiteSpace:"nowrap"}}>{a}</th>)}
+                <th style={{padding:"8px 6px",textAlign:"center",color:GRL}}>IVA</th>
                 <th style={{padding:"8px 6px",textAlign:"center",color:GRL}}>DISP</th>
                 <th style={{padding:"8px 6px",textAlign:"right",color:"#16a34a",fontWeight:700}}>PÚB</th>
                 <th style={{padding:"8px 6px",textAlign:"right",color:"#2563eb",fontWeight:700}}>DIST</th>
@@ -1045,12 +1044,13 @@ export default function App(){
                 <th style={{padding:"8px 6px",width:34}}></th>
               </tr></thead>
               <tbody>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
-                const tot=calcTotal(p),disp=tot>0;
+                const tot=calcTotal(p),disp=tot>0,conIvaP=tieneIVA(p);
                 return <tr key={i} style={{borderTop:"1px solid "+BD,background:i%2===0?CD:"#fafafa"}}>
                   <td style={{padding:"6px 10px",fontFamily:"monospace",color:GRL,whiteSpace:"nowrap"}}>{p.codigo}</td>
                   <td style={{padding:"6px 10px",minWidth:mob?140:300}}>{p.descripcion}</td>
                   <td style={{padding:"6px 6px",textAlign:"right",fontWeight:700,color:nColor(tot)}}>{stockVis(tot)}</td>
-                  {!mob&&ALMS.map(a=>{const v=Number(p[a])||0;return<td key={a} style={{padding:"6px 5px",textAlign:"right",color:v>0?"#5a5a5a":"#ddd"}}>{v>0?(v>=30?"+30":v):"—"}</td>;})}
+                  {!mob&&ALMS.map(a=>{const v=safeNum(p[a]);return<td key={a} style={{padding:"6px 5px",textAlign:"right",color:v>0?"#5a5a5a":"#ddd"}}>{v>0?(v>=30?"+30":v):"—"}</td>;})}
+                  <td style={{padding:"6px 6px",textAlign:"center",fontSize:10,fontWeight:700,color:conIvaP?"#2563eb":"#dc2626"}}>{conIvaP?"16%":"0%"}</td>
                   <td style={{padding:"6px 6px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
                   <td style={{padding:"6px 6px",textAlign:"right",color:"#16a34a"}}>{money(p.publico)}</td>
                   <td style={{padding:"6px 6px",textAlign:"right",color:"#2563eb"}}>{money(p.distribuidor)}</td>
@@ -1075,7 +1075,7 @@ export default function App(){
             </div>
           </div>
           {mob?(
-            <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+            <div>{users.map(u=><div key={u.id} style={{background:u.rol==="admin"?"#eff6ff":CD,border:"1px solid "+(u.rol==="admin"?"#bfdbfe":BD),borderRadius:6,padding:14,marginBottom:8}}>
               <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
                 <div><div style={{fontWeight:700,fontSize:13}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</div>
                 {u.empresa&&<div style={{color:GRL,fontSize:11}}>{u.empresa}</div>}</div>
@@ -1089,7 +1089,7 @@ export default function App(){
               </div>
             </div>)}</div>
           ):(
-            <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+            <div style={{border:"1px solid "+BD,borderRadius:6,overflow:"hidden"}}>
               <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                 <thead><tr style={{background:"#f0f0f0"}}>{["NOMBRE","EMPRESA","USUARIO","CONTRASEÑA","ROL","TIPO/LISTA","ESTATUS","ACCIONES"].map(h=><th key={h} style={{padding:"9px 14px",textAlign:"left",color:OR,fontWeight:700,fontSize:10,letterSpacing:1}}>{h}</th>)}</tr></thead>
                 <tbody>{users.map((u,i)=><tr key={u.id} style={{borderTop:"1px solid "+BD,background:u.rol==="admin"?"#eff6ff":i%2===0?CD:"#fafafa"}}>
@@ -1115,15 +1115,15 @@ export default function App(){
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
 
         {tab==="settings"&&<div style={{maxWidth:520}}>
-          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>🔑 CAMBIAR MI CONTRASEÑA</div>
             <ChangePassword session={session} db={db} hashPassword={hashPassword} checkPassword={checkPassword}/>
           </div>
-          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>👤 CREAR USUARIO ADMINISTRADOR</div>
             <CreateAdmin session={session} db={db} hashPassword={hashPassword}/>
           </div>
-          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24}}>
             <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:12}}>ℹ️ INFORMACIÓN DEL SISTEMA</div>
             <div style={{color:GRL,fontSize:12,lineHeight:2}}>
               <div>🔥 Firebase: <strong style={{color:"#1a1a1a"}}>portal-tapatia</strong></div>
@@ -1142,7 +1142,8 @@ export default function App(){
   );
 
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
-  const lista=session?.lista, vend=isVendedor(session);
+  const lista=safe(session?.lista).toUpperCase();
+  const vend=isVendedor(session);
   return(
     <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
@@ -1151,20 +1152,18 @@ export default function App(){
         <span style={{color:"#fff",fontSize:14}}>★</span>
         <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:700}}>CONTADO ANTICIPADO: <span style={{color:"#ffe0c0"}}>3% DESCUENTO ADICIONAL</span></span>
       </div>
-      <div style={{background:"linear-gradient(90deg,#1e40af,#1d4ed8,#2563eb)",padding:"10px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",justifyContent:"center",gap:10,boxShadow:"inset 0 -2px 0 rgba(0,0,0,0.15)"}}>
+      <div style={{background:"linear-gradient(90deg,#1e40af,#1d4ed8,#2563eb)",padding:"10px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",justifyContent:"center",gap:10}}>
         <span style={{fontSize:mob?16:18}}>💳</span>
-        <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:600,letterSpacing:0.3}}>
+        <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:600}}>
           ¡Solicita tus compras hasta con{" "}
           <span style={{color:"#fbbf24",fontWeight:800,fontSize:mob?13:15}}>90 días de crédito</span>
           {" "}con{" "}
-          <span style={{color:"#93c5fd",fontWeight:800,fontStyle:"italic"}}>Tapatía Credit</span>
-          <span style={{color:"#fbbf24",fontWeight:800}}>!</span>
+          <span style={{color:"#93c5fd",fontWeight:800,fontStyle:"italic"}}>Tapatía Credit</span>!
         </span>
         <span style={{fontSize:mob?14:16}}>🏆</span>
       </div>
 
-      {/* Sub-tabs cliente */}
-      <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+      <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto"}}>
         {[["products","📦 CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"]].map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
         ))}
@@ -1186,7 +1185,7 @@ export default function App(){
             {mob?(
               <div>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
                 const tot=calcTotal(p),disp=tot>0,conIvaP=tieneIVA(p);
-                return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+                return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8}}>
                   <div style={{fontFamily:"monospace",color:GRL,fontSize:10,marginBottom:2}}>{p.codigo}</div>
                   <div style={{fontSize:12,fontWeight:600,marginBottom:4,lineHeight:1.4}}>{p.descripcion}</div>
                   <div style={{fontSize:10,marginBottom:6,color:conIvaP?"#2563eb":"#dc2626",fontWeight:600}}>{conIvaP?"🧾 +IVA 16%":"🌾 Sin IVA"}</div>
@@ -1199,20 +1198,20 @@ export default function App(){
                     <span style={{color:OR,fontWeight:700,fontSize:14}}>{money(getPrecio(p,lista))}</span>
                   </div>}
                   <div style={{display:"flex",gap:8,marginBottom:6,flexWrap:"wrap",alignItems:"center"}}>
-                    <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Total: {stockVis(tot)}</span>
+                    <span style={{color:nColor(tot),fontWeight:700,fontSize:11}}>Stock: {stockVis(tot)}</span>
                     <span style={{color:disp?"#16a34a":"#dc2626",fontSize:11,fontWeight:700}}>{disp?"● Disponible":"● Sin stock"}</span>
                   </div>
                   <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:8}}>
-                    {ALMS.map((a,idx)=>{const v=Number(p[a])||0;return<div key={a} style={{background:v>0?"#f0fdf4":"#f9f9f9",border:"1px solid "+(v>0?"#bbf7d0":BD),borderRadius:3,padding:"2px 7px",textAlign:"center"}}>
+                    {ALMS.map((a,idx)=>{const v=safeNum(p[a]);return<div key={a} style={{background:v>0?"#f0fdf4":"#f9f9f9",border:"1px solid "+(v>0?"#bbf7d0":BD),borderRadius:3,padding:"2px 7px",textAlign:"center"}}>
                       <div style={{fontSize:9,color:GRL}}>{ALMS_L[idx]}</div>
                       <div style={{fontSize:11,fontWeight:700,color:v>0?nColor(v):"#ccc"}}>{v>=30?"+30":v}</div>
                     </div>;})}
                   </div>
-                  <button onClick={()=>addToCart(p)} style={{width:"100%",padding:"8px",background:OR,color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:12,letterSpacing:1}}>＋ AGREGAR A COTIZACIÓN</button>
+                  <button onClick={()=>addToCart(p)} style={{width:"100%",padding:"8px",background:OR,color:"#fff",border:"none",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:12}}>＋ AGREGAR A COTIZACIÓN</button>
                 </div>;
               })}</div>
             ):(
-              <div style={{overflowX:"auto",border:"1px solid "+BD,borderRadius:6,boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+              <div style={{overflowX:"auto",border:"1px solid "+BD,borderRadius:6}}>
                 <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
                   <thead><tr style={{background:"#f0f0f0"}}>
                     <th style={{padding:"9px 12px",textAlign:"left",color:OR,fontWeight:700,whiteSpace:"nowrap"}}>CÓDIGO</th>
@@ -1242,10 +1241,10 @@ export default function App(){
                       </>:<td style={{padding:"7px 10px",textAlign:"right",fontWeight:700,color:OR,whiteSpace:"nowrap"}}>{money(getPrecio(p,lista))}</td>}
                       <td style={{padding:"7px 8px",textAlign:"right",fontWeight:700,color:nColor(tot)}}>{stockVis(tot)}</td>
                       <td style={{padding:"7px 8px",textAlign:"center",color:GRL,fontSize:11}}>{almPpal(p)}</td>
-                      {ALMS.map(a=>{const v=Number(p[a])||0;return<td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v>=30?"+30":v}</td>;})}
+                      {ALMS.map(a=>{const v=safeNum(p[a]);return<td key={a} style={{padding:"7px 6px",textAlign:"right",fontSize:11,color:v>0?nColor(v):"#ccc",fontWeight:v>0?600:400}}>{v>=30?"+30":v}</td>;})}
                       <td style={{padding:"7px 8px",textAlign:"center"}}><span style={{color:disp?"#16a34a":"#dc2626",fontWeight:700,fontSize:10}}>{disp?"SÍ":"NO"}</span></td>
                       <td style={{padding:"6px 8px"}}>
-                        <button onClick={()=>addToCart(p)} title="Agregar a cotización"
+                        <button onClick={()=>addToCart(p)} title="Agregar"
                           style={{background:OR,color:"#fff",border:"none",borderRadius:4,width:26,height:26,cursor:"pointer",fontSize:14,fontWeight:700,display:"flex",alignItems:"center",justifyContent:"center"}}>＋</button>
                       </td>
                     </tr>;
