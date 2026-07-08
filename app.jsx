@@ -55,9 +55,11 @@ const tieneIVA = p => {
   return false;
 };
 
-// Extraer fecha ordenable de ETA (DD/MM/YYYY o texto libre con fecha)
+// Extraer fecha ordenable de ETA — ARRIBADO primero, luego fechas ascendentes
 function etaSort(eta){
-  const s=safe(eta);
+  const s=safe(eta).toUpperCase();
+  // Ya está en puerto → primero en la lista
+  if(/PUERTO|ARRIB|LLEG/.test(s)&&!/\d{1,2}\//.test(s)) return "0000-00-00";
   const m1=s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if(m1) return `${m1[3]}-${m1[2].padStart(2,"0")}-${m1[1].padStart(2,"0")}`;
   const meses={ENE:"01",FEB:"02",MAR:"03",ABR:"04",MAY:"05",JUN:"06",JUL:"07",AGO:"08",SEP:"09",OCT:"10",NOV:"11",DIC:"12"};
