@@ -44,17 +44,53 @@ const getPrecio = (p,l) => {
   if(s==="ASOCIADO")     return safeNum(p.asociado);
   return safeNum(p.publico);
 };
-// IVA desde columna CSV — acepta SI/NO, 1/0, TRUE/FALSE, 16/0
-const maskContenedor = s => {
-  const v=safe(s); if(!v||v==="—") return "—";
-  const visible=4;
-  return "*".repeat(Math.max(0,v.length-visible))+v.substring(v.length-visible);
-};
-const tieneIVA = p => {
-  const v=safe(p?.iva??p?.IVA??"").toUpperCase();
-  return v!==""&&v!=="0"&&v!=="NO"&&v!=="N"&&v!=="FALSE";
-};
 const clampDesc = v => Math.min(30,Math.max(0,Math.round(parseInt(v)||0)));
+
+// IVA desde Firebase — campo "iva", valores: SI/NO, 1/0, TRUE/FALSE, 16/0
+const tieneIVA = p => {
+  const raw = p?.iva ?? p?.IVA ?? p?.["IVA "] ?? p?.["iva "] ?? "";
+  const v = safe(raw).toUpperCase();
+  if(v === "" || v === "0" || v === "NO" || v === "N" || v === "FALSE") return false;
+  if(v === "SI" || v === "SÍ" || v === "1" || v === "TRUE" || v === "16") return true;
+  return false;
+};
+
+// Extraer fecha ordenable de ETA (DD/MM/YYYY o texto libre con fecha)
+function etaSort(eta){
+  const s=safe(eta);
+  const m1=s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m1) return `${m1[3]}-${m1[2].padStart(2,"0")}-${m1[1].padStart(2,"0")}`;
+  const meses={ENE:"01",FEB:"02",MAR:"03",ABR:"04",MAY:"05",JUN:"06",JUL:"07",AGO:"08",SEP:"09",OCT:"10",NOV:"11",DIC:"12"};
+  const m2=s.match(/(\d{1,2})\s*\/?\s*(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)/i);
+  if(m2){
+    const yr=new Date().getFullYear();
+    return `${yr}-${meses[m2[2].toUpperCase()]}-${m2[1].padStart(2,"0")}`;
+  }
+  return "9999-99-99";
+}
+
+// ETA a almacén = ETA puerto + 7 días
+function etaAlmacen(eta){
+  const s=safe(eta);
+  const m1=s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if(m1){
+    const d=new Date(Number(m1[3]),Number(m1[2])-1,Number(m1[1]));
+    if(!isNaN(d.getTime())){
+      d.setDate(d.getDate()+7);
+      return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+    }
+  }
+  const meses={ENE:0,FEB:1,MAR:2,ABR:3,MAY:4,JUN:5,JUL:6,AGO:7,SEP:8,OCT:9,NOV:10,DIC:11};
+  const m2=s.match(/(\d{1,2})\s*\/?\s*(ENE|FEB|MAR|ABR|MAY|JUN|JUL|AGO|SEP|OCT|NOV|DIC)/i);
+  if(m2){
+    const d=new Date(new Date().getFullYear(),meses[m2[2].toUpperCase()],Number(m2[1]));
+    if(!isNaN(d.getTime())){
+      d.setDate(d.getDate()+7);
+      return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+    }
+  }
+  return "+7 días aprox.";
+}
 
 // ── Hash SHA-256 ──────────────────────────────────────────────
 async function hashPassword(pwd){
@@ -65,15 +101,6 @@ async function hashPassword(pwd){
 async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 
 // ── Firebase helpers ──────────────────────────────────────────
-async function fbGetTransitos(){
-  try {
-    const snap=await getDocs(collection(db,"transitos"));
-    if(snap.empty) return [];
-    return snap.docs.map(d=>({id:d.id,...d.data()}))
-      .sort((a,b)=>etaSort(a.eta).localeCompare(etaSort(b.eta)));
-  } catch(e){ console.error("fbGetTransitos:",e); return null; }
-}
-
 async function fbGetUsuarios(){
   try {
     const snap=await getDocs(collection(db,"usuarios"));
@@ -99,8 +126,16 @@ async function fbGetCotizaciones(usuario,isAdmin){
     return data.sort((a,b)=>new Date(b.fecha||0)-new Date(a.fecha||0));
   } catch(e){ console.error("fbGetCotizaciones:",e); return null; }
 }
+async function fbGetTransitos(){
+  try {
+    const snap=await getDocs(collection(db,"transitos"));
+    if(snap.empty) return [];
+    return snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>etaSort(a.eta).localeCompare(etaSort(b.eta)));
+  } catch(e){ console.error("fbGetTransitos:",e); return null; }
+}
 
-// ── Búsqueda ──────────────────────────────────────────────────
+// ── Búsqueda inteligente ──────────────────────────────────────
 function cIn(s){return safe(s).toUpperCase();}
 function strp(s){return safe(s).toUpperCase().replace(/[^0-9XR\.]/g,"");}
 function getVariants(s){
@@ -148,8 +183,7 @@ function detectTipo(s){
 // ── Permisos ──────────────────────────────────────────────────
 function canDo(session,accion){
   const rol=session?.rol;
-  if(rol==="superadmin") return true;
-  if(rol==="admin") return ["productos","clientes","subir_csv","crear_cliente","editar_cliente","toggle_estatus","eliminar_cliente"].includes(accion);
+  if(rol==="superadmin"||rol==="admin") return true;
   return false;
 }
 function isAdminRole(s){ return s?.rol==="admin"||s?.rol==="superadmin"; }
@@ -165,7 +199,7 @@ function parseCsv(text){
     const vals=line.split(delim),obj={};
     headers.forEach((h,i)=>{const v=safe(vals[i]??"");obj[h]=(!isNaN(v)&&v!=="")?parseFloat(v):v;});
     return obj;
-  }).filter(r=>r.CODIGO||r["CÓDIGO"]||r.codigo);
+  }).filter(r=>Object.values(r).some(v=>v!==""&&v!==undefined));
 }
 
 // ── UI Components ─────────────────────────────────────────────
@@ -224,7 +258,6 @@ function Pager({total,pg,setPg,ps=50}){
 
 // ── PDF ───────────────────────────────────────────────────────
 async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNombre}){
-  // Sanitizar todo antes de tocar jsPDF
   const sfolio    = safe(folio)||"S/F";
   const snota     = safe(nota);
   const svig      = safe(vigencia)||"7 días naturales";
@@ -237,15 +270,12 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   const doc2=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
   const W=210,M=15;
 
-  // Header naranja
   doc2.setFillColor(255,107,6); doc2.rect(0,0,W,42,"F");
 
-  // Logo imagen
   try {
     const resp=await fetch(LOGO_URL);
     const blob=await resp.blob();
     const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
-    // Calcular dimensiones manteniendo aspect ratio
     const img=new Image();
     await new Promise(r=>{img.onload=r;img.src=b64;});
     const ratio=img.naturalWidth/img.naturalHeight;
@@ -260,14 +290,12 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques",M,28);
   doc2.text("Tlaquepaque, Jalisco, México  |  ventas@llanteratapatia.com  |  www.tapatia.app",M,33);
 
-  // Etiqueta cotización
   doc2.setFillColor(210,75,0);doc2.rect(138,0,72,42,"F");
   doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
   doc2.text("COTIZACIÓN",174,14,{align:"center"});
   doc2.setFontSize(11);doc2.text(sfolio,174,22,{align:"center"});
   doc2.setFontSize(9);doc2.setFont("helvetica","normal");doc2.text(fecha,174,29,{align:"center"});
 
-  // Datos cotización
   let y=50;
   doc2.setFillColor(245,245,245);doc2.rect(M,y-4,W-M*2,26,"F");
   doc2.setDrawColor(230,230,230);doc2.setLineWidth(0.3);doc2.rect(M,y-4,W-M*2,26);
@@ -282,11 +310,9 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   tf("Elaboró:",snombre,M+2,M+20);tf("Vigencia:",svig,100,116);y+=6;
   doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.setFontSize(8.5);doc2.text("Cliente:",M+2,y);
   doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);
-  // Truncar cliente si es muy largo
   const clienteTxt=doc2.splitTextToSize(scliente,100)[0]||scliente;
   doc2.text(clienteTxt,M+20,y);
 
-  // Clasificación IVA
   const conIvaItems=sitems.filter(it=>tieneIVA(it));
   const sinIvaItems=sitems.filter(it=>!tieneIVA(it));
   y+=10;
@@ -298,11 +324,10 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     doc2.text("Productos con IVA (16%)",M,y);
   } else {
     doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(80,80,80);
-    doc2.text("* Productos sin IVA marcados con asterisco",M,y);
+    doc2.text("Cotización con productos mixtos (con y sin IVA)",M,y);
   }
   y+=4;
 
-  // Tabla productos
   const rows=sitems.map((it,i)=>[
     i+1,
     safe(it.codigo)||"—",
@@ -322,10 +347,8 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     columnStyles:{0:{halign:"center",cellWidth:8},1:{cellWidth:28},2:{cellWidth:82},3:{halign:"center",cellWidth:14},4:{halign:"right",cellWidth:26},5:{halign:"right",cellWidth:26}},
     alternateRowStyles:{fillColor:[250,250,250]},
     tableLineColor:[220,220,220],tableLineWidth:0.1,
-    didParseCell:data=>{if(data.section==="body"&&data.column.index===2&&safe(data.cell.raw).endsWith(" *"))data.cell.styles.textColor=[180,30,30];}
   });
 
-  // Totales
   const subtotal=sitems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad),0);
   const ivaTotal=conIvaItems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad)*0.16,0);
   const descMonto=sdesc>0?subtotal*(sdesc/100):0;
@@ -343,7 +366,7 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     ty+=6.5;
   };
   trow("Subtotal:",money2(subtotal));
-  trow("IVA:",money2(ivaTotal),ivaTotal===0?[180,180,180]:[37,99,235]);
+  trow("IVA:",money2(ivaTotal),ivaTotal===0?[150,150,150]:[37,99,235]);
   if(sdesc>0) trow(`Descuento (${sdesc}%):`,"-"+money2(descMonto),[200,30,30]);
 
   doc2.setDrawColor(255,107,6);doc2.setLineWidth(0.6);doc2.line(bx,ty+2,bx+bw,ty+2);
@@ -352,10 +375,9 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   doc2.text("TOTAL:",bx+3,ty+9.5);
   doc2.text(money2(total),bx+bw-2,ty+9.5,{align:"right"});
 
-  // Notas
   if(snota){
     const ny=ty+18;
-    if(ny<265){
+    if(ny<260){
       doc2.setTextColor(60,60,60);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
       doc2.text("OBSERVACIONES:",M,ny);
       doc2.setFont("helvetica","normal");doc2.setFontSize(7.5);
@@ -363,9 +385,8 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     }
   }
 
-  // Datos bancarios
   const by=ty+20+(snota?12:0);
-  if(by<268){
+  if(by<260){
     doc2.setFillColor(245,245,245);doc2.rect(M,by,W-M*2,20,"F");
     doc2.setDrawColor(220,220,220);doc2.rect(M,by,W-M*2,20);
     doc2.setTextColor(OR);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
@@ -381,7 +402,6 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
     doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("012320001544831389",118,by+17);
   }
 
-  // Footer
   doc2.setFillColor(255,107,6);doc2.rect(0,282,W,15,"F");
   doc2.setTextColor(255,255,255);doc2.setFont("helvetica","bold");doc2.setFontSize(7.5);
   doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.",W/2,286,{align:"center"});
@@ -525,7 +545,6 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
               <option>Sujeto a disponibilidad</option>
             </select>
           </div>
-          {/* Descuento solo vendedor/admin — enteros 0-30 */}
           {vend&&(
             <div style={{marginBottom:10}}>
               <div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>DESCUENTO ADICIONAL % (0–30)</div>
@@ -540,7 +559,6 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
               placeholder="Condiciones especiales, etc."
               style={{width:"100%",padding:"8px 10px",border:"1px solid #e5e7eb",borderRadius:4,fontSize:12,resize:"none",outline:"none",boxSizing:"border-box"}}/>
           </div>
-          {/* Resumen */}
           <div style={{background:"#fff",border:"1px solid #e5e7eb",borderRadius:4,padding:"10px 12px",marginBottom:12,fontSize:12}}>
             <div style={{display:"flex",justifyContent:"space-between",color:GRL,marginBottom:3}}>
               <span>Subtotal:</span><span style={{color:"#1a1a1a",fontWeight:600}}>{money2(subtotal)}</span>
@@ -570,7 +588,7 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
   );
 }
 
-// ── Historial ─────────────────────────────────────────────────
+// ── Historial de cotizaciones ─────────────────────────────────
 function HistorialCotizaciones({session,db,mob}){
   const [cots,setCots]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -664,7 +682,7 @@ function HistorialCotizaciones({session,db,mob}){
   );
 }
 
-// ── Consulta pública de tránsitos (todos los usuarios, SIN contenedor) ──
+// ── Próximos Arribos (vendedores — sin contenedor, con ETA almacén) ──
 function ProximosArribos({db,mob}){
   const [transitos,setTransitos]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -689,7 +707,6 @@ function ProximosArribos({db,mob}){
     return()=>{if(dbRef3.current)clearTimeout(dbRef3.current);};
   },[search]);
 
-  // Filtrado + agrupado por SKU/producto (SIN mostrar contenedor)
   const grouped=useMemo(()=>{
     const q=ds.trim();
     const filtered=(!q||q.length<2)?transitos:transitos.filter(t=>smartMatch(q,{descripcion:t.producto||"",codigo:t.sku||""}));
@@ -714,12 +731,10 @@ function ProximosArribos({db,mob}){
         </span>
       </div>
 
-      <div style={{marginBottom:0}}>
-        <Buscador search={search} ds={ds} onChange={setSearch} count={grouped.length} mob={mob}/>
-        {ds.trim().length>=2&&<div style={{marginTop:-9,marginBottom:14}}>
-          <span style={{color:"#bbb",fontSize:10}}>{totalPiezas.toLocaleString("es-MX")} piezas en camino</span>
-        </div>}
-      </div>
+      <Buscador search={search} ds={ds} onChange={setSearch} count={grouped.length} mob={mob}/>
+      {ds.trim().length>=2&&<div style={{marginTop:-9,marginBottom:14}}>
+        <span style={{color:"#bbb",fontSize:10}}>{totalPiezas.toLocaleString("es-MX")} piezas en camino</span>
+      </div>}
 
       {loading&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando próximos arribos...</div>}
 
@@ -752,9 +767,7 @@ function ProximosArribos({db,mob}){
             <div style={{padding:"8px 14px"}}>
               {g.arribos.map((a,j)=>(
                 <div key={j} style={{padding:"8px 0",borderBottom:j<g.arribos.length-1?"1px solid #f3f4f6":"none"}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
-                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
                   <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
                     <span style={{fontSize:10,color:GRL}}>⚓ Puerto: <strong style={{color:"#1a1a1a"}}>{a.eta||"—"}</strong></span>
                     <span style={{fontSize:10,color:GRL}}>🏭 Almacén: <strong style={{color:"#2563eb"}}>{etaAlmacen(a.eta)}</strong></span>
@@ -788,7 +801,7 @@ function ProximosArribos({db,mob}){
   );
 }
 
-// ── Sección Tránsitos (admin/vendedor con contenedor) ────────
+// ── Tránsitos (admin: carga CSV / vendedor: detalle) ─────────
 function Transitos({session,db,mob}){
   const [transitos,setTransitos]=useState([]);
   const [loading,setLoading]=useState(true);
@@ -811,21 +824,18 @@ function Transitos({session,db,mob}){
     return()=>{mounted=false;};
   },[]);
 
-  // Debounce buscador
   useEffect(()=>{
     if(dbRef2.current) clearTimeout(dbRef2.current);
     dbRef2.current=setTimeout(()=>setDs(search),300);
     return()=>{if(dbRef2.current)clearTimeout(dbRef2.current);};
   },[search]);
 
-  // Filtrado con smartMatch
   const filtered=useMemo(()=>{
     const q=ds.trim();
     if(!q||q.length<2) return transitos;
     return transitos.filter(t=>smartMatch(q,{descripcion:t.producto||"",codigo:t.sku||""}));
   },[transitos,ds]);
 
-  // Subir CSV de tránsitos
   async function handleTransitosFile(e){
     const file=e.target.files[0];if(!file)return;e.target.value="";
     if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
@@ -844,7 +854,6 @@ function Transitos({session,db,mob}){
         })).filter(p=>p.sku||p.producto);
         if(mapped.length===0){setMsg("❌ No hay registros válidos.");setUploading(false);return;}
 
-        // Borrar tránsitos anteriores
         setMsg("🗑️ Actualizando tránsitos...");
         const oldSnap=await getDocs(collection(db,"transitos"));
         if(oldSnap.docs.length>0){
@@ -852,7 +861,6 @@ function Transitos({session,db,mob}){
           oldSnap.docs.forEach(d=>del.delete(d.ref));
           await del.commit();
         }
-        // Insertar nuevos en lotes de 400
         const chunk=400;
         for(let i=0;i<mapped.length;i+=chunk){
           const batch=writeBatch(db);
@@ -869,7 +877,6 @@ function Transitos({session,db,mob}){
     reader.readAsText(file,"UTF-8");
   }
 
-  // Agrupar por SKU para mostrar resumen
   const grouped=useMemo(()=>{
     const map={};
     filtered.forEach(t=>{
@@ -884,7 +891,6 @@ function Transitos({session,db,mob}){
 
   return(
     <div>
-      {/* Subir CSV — solo admin */}
       {admin&&<div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:180}}>
           <div style={{fontWeight:700,fontSize:12,marginBottom:3}}>ACTUALIZAR TRÁNSITOS</div>
@@ -901,7 +907,6 @@ function Transitos({session,db,mob}){
           border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":msg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{msg}</div>}
       </div>}
 
-      {/* Buscador */}
       <Buscador search={search} ds={ds} onChange={setSearch} count={grouped.length} mob={mob}/>
       {ds.trim().length>=2&&<div style={{marginTop:-9,marginBottom:14}}>
         <span style={{color:"#bbb",fontSize:10}}>{totalPiezas.toLocaleString("es-MX")} piezas en tránsito</span>
@@ -910,7 +915,7 @@ function Transitos({session,db,mob}){
       {loading&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando tránsitos...</div>}
 
       {!loading&&transitos.length===0&&<div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
-        <div style={{fontSize:40,marginBottom:12}}>🚢</div>
+        <div style={{fontSize:40,marginBottom:12}}>🚛</div>
         <div style={{fontSize:14,fontWeight:600}}>Sin tránsitos registrados</div>
         {admin&&<div style={{fontSize:12,marginTop:6}}>Sube un CSV para registrar próximos arribos</div>}
       </div>}
@@ -920,12 +925,10 @@ function Transitos({session,db,mob}){
         <span style={{color:GRL,fontSize:11}}>{transitos.length} registros · {transitos.reduce((s,t)=>s+safeNum(t.qty),0).toLocaleString("es-MX")} piezas totales en tránsito. Usa el buscador para filtrar.</span>
       </div>}
 
-      {/* Resultados agrupados por SKU */}
       {!loading&&ds.trim().length>=2&&grouped.length===0&&<div style={{textAlign:"center",padding:30,color:GRL,fontSize:13}}>Sin resultados para "<strong>{ds}</strong>"</div>}
 
       {!loading&&ds.trim().length>=2&&grouped.map((g,i)=>(
         <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-          {/* Header SKU */}
           <div style={{background:"#fff7ed",padding:"10px 14px",borderBottom:"1px solid #fed7aa"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
               <div>
@@ -972,8 +975,7 @@ function Transitos({session,db,mob}){
   );
 }
 
-// ── Sección Tránsitos ─────────────────────────────────────────
-
+// ── PassCell ──────────────────────────────────────────────────
 function PassCell({uid,db,hashPassword}){
   const [show,setShow]=useState(false);const [editing,setEditing]=useState(false);
   const [newPass,setNewPass]=useState("");const [saving,setSaving]=useState(false);
@@ -1091,7 +1093,7 @@ function CreateAdmin({session,db,hashPassword}){
 // ════════════════════════════════════════════════════════════
 export default function App(){
   const [session,setSession]=useState(()=>{try{const s=localStorage.getItem("gt_session");return s?JSON.parse(s):null;}catch(e){return null;}});
-  const [view,setView]=useState(()=>{try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return isAdminRole(u)?"admin":"client";}}catch(e){}return "login";});
+  const [view,setView]=useState(()=>{try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return (u.rol==="admin"||u.rol==="superadmin")?"admin":"client";}}catch(e){}return "login";});
   const [tab,setTab]=useState("products");
   const [users,setUsers]=useState([]);
   const [products,setProducts]=useState([]);
@@ -1127,7 +1129,6 @@ export default function App(){
   async function loadProducts(){setProdLoad(true);const d=await fbGetProductos();if(d!==null)setProducts(d);setProdLoad(false);}
   async function loadUsers(){setUserLoad(true);const d=await fbGetUsuarios();if(d!==null)setUsers(d);setUserLoad(false);}
 
-  // ── addToCart ─────────────────────────────────────────────
   function addToCart(p){
     const lista=safe(session?.lista).toUpperCase();
     const vend=isVendedor(session);
@@ -1145,7 +1146,6 @@ export default function App(){
     });
   }
 
-  // ── Login ─────────────────────────────────────────────────
   async function doLogin(){
     setLerr("");setLoginLoad(true);
     try{
@@ -1158,7 +1158,6 @@ export default function App(){
       setSession(u);localStorage.setItem("gt_session",JSON.stringify(u));
       setView(isAdminRole(u)?"admin":"client");
       setLu("");setLp("");
-      // Cargar datos inmediatamente — evita pantalla blanca
       const pd=await fbGetProductos();if(pd!==null)setProducts(pd);
       if(isAdminRole(u)){const ud=await fbGetUsuarios();if(ud!==null)setUsers(ud);}
     }catch(e){setLerr("Error: "+safe(e.message));}
@@ -1167,7 +1166,6 @@ export default function App(){
 
   function doLogout(){setSession(null);setView("login");setSearch("");setDs("");setPage(0);setProducts([]);setUsers([]);setCart([]);localStorage.removeItem("gt_session");}
 
-  // ── Subir CSV ─────────────────────────────────────────────
   async function handleFile(e){
     const file=e.target.files[0];if(!file)return;e.target.value="";
     if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
@@ -1189,7 +1187,6 @@ export default function App(){
           publico:     safeNum(r.PUBLICO??r["PÚBLICO"]??r.publico),
           distribuidor:safeNum(r.DISTRIBUIDOR??r.distribuidor),
           asociado:    safeNum(r.ASOCIADO??r.asociado),
-          // IVA: manejar columna con espacio al final "IVA "
           iva: safe(r["IVA "]??r.IVA??r["iva "]??r.iva??"0"),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.codigo);
@@ -1217,7 +1214,6 @@ export default function App(){
     reader.readAsText(file,"UTF-8");
   }
 
-  // ── Guardar cliente ───────────────────────────────────────
   async function saveClient(form){
     setSaving(true);
     try{
@@ -1337,7 +1333,7 @@ export default function App(){
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
       {CartFab}
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["transitos","🚛 TRÁNSITOS"],["arribos","🚢 ARRIBOS (VISTA CLIENTE)"],
+        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["transitos","🚛 TRÁNSITOS"],["arribos","🚢 ARRIBOS"],
           ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
           .map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
@@ -1429,15 +1425,14 @@ export default function App(){
                   <td style={{padding:"9px 14px",fontWeight:600}}>{u.nombre}{u.rol==="admin"&&<span style={{marginLeft:6,fontSize:9,background:"#dbeafe",color:"#2563eb",padding:"1px 6px",borderRadius:3,fontWeight:700}}>ADMIN</span>}</td>
                   <td style={{padding:"9px 14px",color:GRL,fontSize:11}}>{u.empresa||"—"}</td>
                   <td style={{padding:"9px 14px",fontFamily:"monospace",color:GRL,fontSize:11}}>{u.usuario}</td>
-                  <td style={{padding:"9px 14px"}}>{(canDo(session,"config")||u.rol!=="admin")?<PassCell uid={u.id} db={db} hashPassword={hashPassword}/>:<span style={{color:"#bbb",fontSize:11}}>—</span>}</td>
+                  <td style={{padding:"9px 14px"}}><PassCell uid={u.id} db={db} hashPassword={hashPassword}/></td>
                   <td style={{padding:"9px 14px"}}><Badge val={u.rol==="superadmin"?"superadmin":u.rol==="admin"?"admin":u.rol}/></td>
                   <td style={{padding:"9px 14px"}}>{u.rol==="admin"||u.rol==="superadmin"?<span style={{color:GRL,fontSize:11}}>—</span>:<Badge val={u.lista}/>}</td>
                   <td style={{padding:"9px 14px"}}><Badge val={u.estatus}/></td>
                   <td style={{padding:"9px 14px"}}><div style={{display:"flex",gap:6}}>
                     {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm onClick={()=>setModal({mode:"edit",data:{...u}})}>EDITAR</Btn>}
                     {(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm ghost onClick={()=>toggleEstatus(u.id,u.estatus)}>{u.estatus==="activo"?"DESACTIVAR":"ACTIVAR"}</Btn>}
-                    {u.id!==session?.id&&canDo(session,"config")&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
-                    {u.id!==session?.id&&!canDo(session,"config")&&(u.rol!=="admin"&&u.rol!=="superadmin")&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
+                    {u.id!==session?.id&&<Btn sm danger onClick={()=>deleteClient(u.id,u.nombre,u.rol)}>ELIMINAR</Btn>}
                   </div></td>
                 </tr>)}</tbody>
               </table>
@@ -1449,7 +1444,7 @@ export default function App(){
 
         {tab==="transitos"&&<Transitos session={session} db={db} mob={mob}/>}
 
-        {tab==="arribos"&&vend&&<ProximosArribos db={db} mob={mob}/>}
+        {tab==="arribos"&&<ProximosArribos db={db} mob={mob}/>}
 
         {tab==="settings"&&<div style={{maxWidth:520}}>
           <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16}}>
@@ -1595,7 +1590,7 @@ export default function App(){
           </>}
         </>}
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
-        {tab==="arribos"&&<ProximosArribos db={db} mob={mob}/>}
+        {tab==="arribos"&&vend&&<ProximosArribos db={db} mob={mob}/>}
         {tab==="transitos"&&vend&&<Transitos session={session} db={db} mob={mob}/>}
       </div>
     </div>
