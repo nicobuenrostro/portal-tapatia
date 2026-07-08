@@ -1555,7 +1555,7 @@ export default function App(){
 
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto"}}>
         {[["products","📦 CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"],
-          ...(vend?[["arribos","🚢 PRÓXIMOS ARRIBOS"],["transitos","🚛 TRÁNSITOS (DETALLE)"]]:[])]
+          ...(vend?[["arribos","🚢 PRÓXIMOS ARRIBOS"]]:[])]
           .map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
         ))}
@@ -1648,8 +1648,7 @@ export default function App(){
           </>}
         </>}
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
-        {tab==="arribos"&&vend&&<ProximosArribos db={db} mob={mob}/>}
-        {tab==="transitos"&&vend&&<Transitos session={session} db={db} mob={mob}/>}
+        {tab==="arribos"&&vend&&<ProximosArribos session={session} db={db} mob={mob}/>}
       </div>
     </div>
   );
