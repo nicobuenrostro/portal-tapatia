@@ -45,6 +45,11 @@ const getPrecio = (p,l) => {
   return safeNum(p.publico);
 };
 // IVA desde columna CSV — acepta SI/NO, 1/0, TRUE/FALSE, 16/0
+const maskContenedor = s => {
+  const v=safe(s); if(!v||v==="—") return "—";
+  const visible=4;
+  return "*".repeat(Math.max(0,v.length-visible))+v.substring(v.length-visible);
+};
 const tieneIVA = p => {
   const v=safe(p?.iva??p?.IVA??"").toUpperCase();
   return v!==""&&v!=="0"&&v!=="NO"&&v!=="N"&&v!=="FALSE";
@@ -60,6 +65,15 @@ async function hashPassword(pwd){
 async function checkPassword(pwd,hash){ return await hashPassword(pwd)===hash; }
 
 // ── Firebase helpers ──────────────────────────────────────────
+async function fbGetTransitos(){
+  try {
+    const snap=await getDocs(collection(db,"transitos"));
+    if(snap.empty) return [];
+    return snap.docs.map(d=>({id:d.id,...d.data()}))
+      .sort((a,b)=>etaSort(a.eta).localeCompare(etaSort(b.eta)));
+  } catch(e){ console.error("fbGetTransitos:",e); return null; }
+}
+
 async function fbGetUsuarios(){
   try {
     const snap=await getDocs(collection(db,"usuarios"));
@@ -650,7 +664,316 @@ function HistorialCotizaciones({session,db,mob}){
   );
 }
 
-// ── PassCell ──────────────────────────────────────────────────
+// ── Consulta pública de tránsitos (todos los usuarios, SIN contenedor) ──
+function ProximosArribos({db,mob}){
+  const [transitos,setTransitos]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState("");
+  const [ds,setDs]=useState("");
+  const dbRef3=useRef(null);
+
+  useEffect(()=>{
+    let mounted=true;
+    (async()=>{
+      setLoading(true);
+      const data=await fbGetTransitos();
+      if(mounted&&data!==null) setTransitos(data);
+      if(mounted) setLoading(false);
+    })();
+    return()=>{mounted=false;};
+  },[]);
+
+  useEffect(()=>{
+    if(dbRef3.current) clearTimeout(dbRef3.current);
+    dbRef3.current=setTimeout(()=>setDs(search),300);
+    return()=>{if(dbRef3.current)clearTimeout(dbRef3.current);};
+  },[search]);
+
+  // Filtrado + agrupado por SKU/producto (SIN mostrar contenedor)
+  const grouped=useMemo(()=>{
+    const q=ds.trim();
+    const filtered=(!q||q.length<2)?transitos:transitos.filter(t=>smartMatch(q,{descripcion:t.producto||"",codigo:t.sku||""}));
+    const map={};
+    filtered.forEach(t=>{
+      const key=safe(t.sku)||safe(t.producto);
+      if(!map[key]) map[key]={sku:t.sku,producto:t.producto,arribos:[]};
+      map[key].arribos.push({qty:t.qty,eta:t.eta});
+    });
+    return Object.values(map);
+  },[transitos,ds]);
+
+  const totalPiezas=grouped.reduce((s,g)=>s+g.arribos.reduce((s2,a)=>s2+safeNum(a.qty),0),0);
+
+  return(
+    <div>
+      <div style={{background:"#eff6ff",borderLeft:"3px solid #2563eb",border:"1px solid #bfdbfe",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+        <span style={{fontSize:16}}>🚢</span>
+        <span style={{color:GRL,fontSize:11}}>
+          Consulta los <strong style={{color:"#1a1a1a"}}>próximos arribos</strong> de producto.
+          La fecha a almacén es <strong style={{color:"#2563eb"}}>aproximada (+7 días desde puerto)</strong> y puede variar.
+        </span>
+      </div>
+
+      <div style={{marginBottom:0}}>
+        <Buscador search={search} ds={ds} onChange={setSearch} count={grouped.length} mob={mob}/>
+        {ds.trim().length>=2&&<div style={{marginTop:-9,marginBottom:14}}>
+          <span style={{color:"#bbb",fontSize:10}}>{totalPiezas.toLocaleString("es-MX")} piezas en camino</span>
+        </div>}
+      </div>
+
+      {loading&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando próximos arribos...</div>}
+
+      {!loading&&transitos.length===0&&<div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
+        <div style={{fontSize:40,marginBottom:12}}>🚢</div>
+        <div style={{fontSize:14,fontWeight:600}}>Sin arribos programados por el momento</div>
+      </div>}
+
+      {!loading&&transitos.length>0&&ds.trim().length<2&&<div style={{textAlign:"center",padding:"30px 20px",color:GRL,fontSize:13}}>
+        <div style={{fontSize:30,marginBottom:8}}>🔍</div>
+        Escribe la medida o código del producto que buscas para ver sus próximos arribos
+      </div>}
+
+      {!loading&&ds.trim().length>=2&&grouped.length===0&&<div style={{textAlign:"center",padding:30,color:GRL,fontSize:13}}>
+        Sin arribos programados para "<strong>{ds}</strong>"
+      </div>}
+
+      {!loading&&ds.trim().length>=2&&grouped.map((g,i)=>(
+        <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          <div style={{background:"#fff7ed",padding:"10px 14px",borderBottom:"1px solid #fed7aa"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div style={{fontSize:13,fontWeight:600,color:"#1a1a1a"}}>{g.producto}</div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11,color:GRL}}>{g.arribos.length} arribo{g.arribos.length!==1?"s":""}</div>
+                <div style={{fontSize:15,fontWeight:700,color:OR}}>{g.arribos.reduce((s,a)=>s+safeNum(a.qty),0).toLocaleString("es-MX")} pzas</div>
+              </div>
+            </div>
+          </div>
+          {mob?(
+            <div style={{padding:"8px 14px"}}>
+              {g.arribos.map((a,j)=>(
+                <div key={j} style={{padding:"8px 0",borderBottom:j<g.arribos.length-1?"1px solid #f3f4f6":"none"}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
+                  </div>
+                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
+                    <span style={{fontSize:10,color:GRL}}>⚓ Puerto: <strong style={{color:"#1a1a1a"}}>{a.eta||"—"}</strong></span>
+                    <span style={{fontSize:10,color:GRL}}>🏭 Almacén: <strong style={{color:"#2563eb"}}>{etaAlmacen(a.eta)}</strong></span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ):(
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:"#f9f9f9"}}>
+                <th style={{padding:"7px 14px",textAlign:"right",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>CANTIDAD</th>
+                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>⚓ ETA PUERTO</th>
+                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>🏭 ETA ALMACÉN (APROX.)</th>
+              </tr></thead>
+              <tbody>{g.arribos.map((a,j)=>(
+                <tr key={j} style={{borderTop:"1px solid #f3f4f6"}}>
+                  <td style={{padding:"8px 14px",textAlign:"right",fontWeight:700,fontSize:13,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</td>
+                  <td style={{padding:"8px 14px",textAlign:"center"}}>
+                    <span style={{background:"#f0fdf4",color:"#16a34a",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{a.eta||"—"}</span>
+                  </td>
+                  <td style={{padding:"8px 14px",textAlign:"center"}}>
+                    <span style={{background:"#eff6ff",color:"#2563eb",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{etaAlmacen(a.eta)}</span>
+                  </td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Sección Tránsitos (admin/vendedor con contenedor) ────────
+function Transitos({session,db,mob}){
+  const [transitos,setTransitos]=useState([]);
+  const [loading,setLoading]=useState(true);
+  const [search,setSearch]=useState("");
+  const [ds,setDs]=useState("");
+  const [msg,setMsg]=useState("");
+  const [uploading,setUploading]=useState(false);
+  const fref2=useRef();
+  const dbRef2=useRef(null);
+  const admin=isAdminRole(session);
+
+  useEffect(()=>{
+    let mounted=true;
+    (async()=>{
+      setLoading(true);
+      const data=await fbGetTransitos();
+      if(mounted&&data!==null) setTransitos(data);
+      if(mounted) setLoading(false);
+    })();
+    return()=>{mounted=false;};
+  },[]);
+
+  // Debounce buscador
+  useEffect(()=>{
+    if(dbRef2.current) clearTimeout(dbRef2.current);
+    dbRef2.current=setTimeout(()=>setDs(search),300);
+    return()=>{if(dbRef2.current)clearTimeout(dbRef2.current);};
+  },[search]);
+
+  // Filtrado con smartMatch
+  const filtered=useMemo(()=>{
+    const q=ds.trim();
+    if(!q||q.length<2) return transitos;
+    return transitos.filter(t=>smartMatch(q,{descripcion:t.producto||"",codigo:t.sku||""}));
+  },[transitos,ds]);
+
+  // Subir CSV de tránsitos
+  async function handleTransitosFile(e){
+    const file=e.target.files[0];if(!file)return;e.target.value="";
+    if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
+    setUploading(true);setMsg("📂 Leyendo archivo...");
+    const reader=new FileReader();
+    reader.onload=async ev=>{
+      try{
+        const rows=parseCsv(ev.target.result);
+        if(rows.length===0){setMsg("❌ No se encontraron datos.");setUploading(false);return;}
+        const mapped=rows.map(r=>({
+          sku:    safe(r.SKU??r.sku??""),
+          producto:safe(r.PRODUCTO??r.producto??""),
+          qty:    safeNum(r.QTY??r.qty),
+          eta:    safe(r.ETA??r.eta??""),
+          actualizado:new Date().toISOString(),
+        })).filter(p=>p.sku||p.producto);
+        if(mapped.length===0){setMsg("❌ No hay registros válidos.");setUploading(false);return;}
+
+        // Borrar tránsitos anteriores
+        setMsg("🗑️ Actualizando tránsitos...");
+        const oldSnap=await getDocs(collection(db,"transitos"));
+        if(oldSnap.docs.length>0){
+          const del=writeBatch(db);
+          oldSnap.docs.forEach(d=>del.delete(d.ref));
+          await del.commit();
+        }
+        // Insertar nuevos en lotes de 400
+        const chunk=400;
+        for(let i=0;i<mapped.length;i+=chunk){
+          const batch=writeBatch(db);
+          mapped.slice(i,i+chunk).forEach((p,j)=>
+            batch.set(doc(collection(db,"transitos"),`t_${String(i+j).padStart(6,"0")}`),p));
+          await batch.commit();
+        }
+        const data=await fbGetTransitos();
+        if(data!==null) setTransitos(data);
+        setMsg(`✅ ${mapped.length} registros de tránsito guardados.`);
+      }catch(err){setMsg("❌ ERROR: "+safe(err.message));}
+      setUploading(false);
+    };
+    reader.readAsText(file,"UTF-8");
+  }
+
+  // Agrupar por SKU para mostrar resumen
+  const grouped=useMemo(()=>{
+    const map={};
+    filtered.forEach(t=>{
+      const key=safe(t.sku)||safe(t.producto);
+      if(!map[key]) map[key]={sku:t.sku,producto:t.producto,arribos:[]};
+      map[key].arribos.push({qty:t.qty,eta:t.eta});
+    });
+    return Object.values(map);
+  },[filtered]);
+
+  const totalPiezas=filtered.reduce((s,t)=>s+safeNum(t.qty),0);
+
+  return(
+    <div>
+      {/* Subir CSV — solo admin */}
+      {admin&&<div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:180}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:3}}>ACTUALIZAR TRÁNSITOS</div>
+          <div style={{color:GRL,fontSize:11}}>CSV UTF-8 — Columnas requeridas:</div>
+          <div style={{color:"#bbb",fontSize:10,marginTop:2}}>SKU, PRODUCTO, QTY, ETA (DD/MM/YYYY)</div>
+        </div>
+        <input type="file" accept=".csv,.tsv,.txt" ref={fref2} onChange={handleTransitosFile} style={{display:"none"}}/>
+        <Btn onClick={()=>{setMsg("");fref2.current.click();}} disabled={uploading}>
+          {uploading?"SUBIENDO...":"SUBIR CSV"}
+        </Btn>
+        {msg&&<div style={{fontSize:11,width:"100%",padding:"8px 12px",borderRadius:4,
+          background:msg.startsWith("✅")?"#f0fdf4":msg.startsWith("❌")?"#fef2f2":"#fffbeb",
+          color:msg.startsWith("✅")?"#16a34a":msg.startsWith("❌")?"#dc2626":"#d97706",
+          border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":msg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{msg}</div>}
+      </div>}
+
+      {/* Buscador */}
+      <Buscador search={search} ds={ds} onChange={setSearch} count={grouped.length} mob={mob}/>
+      {ds.trim().length>=2&&<div style={{marginTop:-9,marginBottom:14}}>
+        <span style={{color:"#bbb",fontSize:10}}>{totalPiezas.toLocaleString("es-MX")} piezas en tránsito</span>
+      </div>}
+
+      {loading&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando tránsitos...</div>}
+
+      {!loading&&transitos.length===0&&<div style={{textAlign:"center",padding:"50px 20px",color:GRL}}>
+        <div style={{fontSize:40,marginBottom:12}}>🚢</div>
+        <div style={{fontSize:14,fontWeight:600}}>Sin tránsitos registrados</div>
+        {admin&&<div style={{fontSize:12,marginTop:6}}>Sube un CSV para registrar próximos arribos</div>}
+      </div>}
+
+      {!loading&&transitos.length>0&&ds.trim().length<2&&<div style={{background:"#fff7ed",borderLeft:"3px solid "+OR,border:"1px solid #fed7aa",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
+        <span style={{color:OR,fontWeight:700}}>i</span>
+        <span style={{color:GRL,fontSize:11}}>{transitos.length} registros · {transitos.reduce((s,t)=>s+safeNum(t.qty),0).toLocaleString("es-MX")} piezas totales en tránsito. Usa el buscador para filtrar.</span>
+      </div>}
+
+      {/* Resultados agrupados por SKU */}
+      {!loading&&ds.trim().length>=2&&grouped.length===0&&<div style={{textAlign:"center",padding:30,color:GRL,fontSize:13}}>Sin resultados para "<strong>{ds}</strong>"</div>}
+
+      {!loading&&ds.trim().length>=2&&grouped.map((g,i)=>(
+        <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
+          {/* Header SKU */}
+          <div style={{background:"#fff7ed",padding:"10px 14px",borderBottom:"1px solid #fed7aa"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
+              <div>
+                <div style={{fontFamily:"monospace",color:OR,fontWeight:700,fontSize:12}}>{g.sku}</div>
+                <div style={{fontSize:13,fontWeight:600,color:"#1a1a1a",marginTop:2}}>{g.producto}</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:11,color:GRL}}>{g.arribos.length} arribo{g.arribos.length!==1?"s":""}</div>
+                <div style={{fontSize:15,fontWeight:700,color:OR}}>{g.arribos.reduce((s,a)=>s+safeNum(a.qty),0).toLocaleString("es-MX")} pzas</div>
+              </div>
+            </div>
+          </div>
+          {/* Detalle arribos */}
+          {mob?(
+            <div style={{padding:"8px 14px"}}>
+              {g.arribos.map((a,j)=>(
+                <div key={j} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 0",borderBottom:j<g.arribos.length-1?"1px solid #f3f4f6":"none"}}>
+                  <div style={{fontSize:10,color:GRL}}>⚓ ETA: <strong style={{color:"#1a1a1a"}}>{a.eta||"—"}</strong></div>
+                  <div style={{fontSize:14,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
+                </div>
+              ))}
+            </div>
+          ):(
+            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
+              <thead><tr style={{background:"#f9f9f9"}}>
+                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>⚓ ETA PUERTO</th>
+                <th style={{padding:"7px 14px",textAlign:"right",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>CANTIDAD</th>
+              </tr></thead>
+              <tbody>{g.arribos.map((a,j)=>(
+                <tr key={j} style={{borderTop:"1px solid #f3f4f6"}}>
+                  <td style={{padding:"8px 14px",textAlign:"center"}}>
+                    <span style={{background:"#f0fdf4",color:"#16a34a",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>
+                      🗓 {a.eta||"—"}
+                    </span>
+                  </td>
+                  <td style={{padding:"8px 14px",textAlign:"right",fontWeight:700,fontSize:13,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Sección Tránsitos ─────────────────────────────────────────
+
 function PassCell({uid,db,hashPassword}){
   const [show,setShow]=useState(false);const [editing,setEditing]=useState(false);
   const [newPass,setNewPass]=useState("");const [saving,setSaving]=useState(false);
@@ -1014,7 +1337,7 @@ export default function App(){
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
       {CartFab}
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],
+        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["transitos","🚛 TRÁNSITOS"],["arribos","🚢 ARRIBOS (VISTA CLIENTE)"],
           ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
           .map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
@@ -1124,6 +1447,10 @@ export default function App(){
 
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
 
+        {tab==="transitos"&&<Transitos session={session} db={db} mob={mob}/>}
+
+        {tab==="arribos"&&vend&&<ProximosArribos db={db} mob={mob}/>}
+
         {tab==="settings"&&<div style={{maxWidth:520}}>
           <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16}}>
             <div style={{fontWeight:700,fontSize:13,color:OR,marginBottom:16}}>🔑 CAMBIAR MI CONTRASEÑA</div>
@@ -1174,7 +1501,9 @@ export default function App(){
       </div>
 
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto"}}>
-        {[["products","📦 CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"]].map(([k,l])=>(
+        {[["products","📦 CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"],
+          ...(vend?[["arribos","🚢 PRÓXIMOS ARRIBOS"],["transitos","🚛 TRÁNSITOS (DETALLE)"]]:[])]
+          .map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
@@ -1266,6 +1595,8 @@ export default function App(){
           </>}
         </>}
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
+        {tab==="arribos"&&<ProximosArribos db={db} mob={mob}/>}
+        {tab==="transitos"&&vend&&<Transitos session={session} db={db} mob={mob}/>}
       </div>
     </div>
   );
