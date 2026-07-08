@@ -682,13 +682,17 @@ function HistorialCotizaciones({session,db,mob}){
   );
 }
 
-// ── Próximos Arribos (vendedores — sin contenedor, con ETA almacén) ──
-function ProximosArribos({db,mob}){
+// ── Arribos (sección única: carga admin + consulta con ETA CEDIS) ──
+function ProximosArribos({session,db,mob}){
   const [transitos,setTransitos]=useState([]);
   const [loading,setLoading]=useState(true);
   const [search,setSearch]=useState("");
   const [ds,setDs]=useState("");
+  const [msg,setMsg]=useState("");
+  const [uploading,setUploading]=useState(false);
+  const frefA=useRef();
   const dbRef3=useRef(null);
+  const admin=isAdminRole(session);
 
   useEffect(()=>{
     let mounted=true;
@@ -721,13 +725,69 @@ function ProximosArribos({db,mob}){
 
   const totalPiezas=grouped.reduce((s,g)=>s+g.arribos.reduce((s2,a)=>s2+safeNum(a.qty),0),0);
 
+  async function handleArribosFile(e){
+    const file=e.target.files[0];if(!file)return;e.target.value="";
+    if(file.name.endsWith(".xlsx")||file.name.endsWith(".xls")){setMsg("⚠️ Guarda como CSV UTF-8 desde Excel.");return;}
+    setUploading(true);setMsg("📂 Leyendo archivo...");
+    const reader=new FileReader();
+    reader.onload=async ev=>{
+      try{
+        const rows=parseCsv(ev.target.result);
+        if(rows.length===0){setMsg("❌ No se encontraron datos.");setUploading(false);return;}
+        const mapped=rows.map(r=>({
+          sku:    safe(r.SKU??r.sku??""),
+          producto:safe(r.PRODUCTO??r.producto??""),
+          qty:    safeNum(r.QTY??r.qty),
+          eta:    safe(r.ETA??r.eta??""),
+          actualizado:new Date().toISOString(),
+        })).filter(p=>p.sku||p.producto);
+        if(mapped.length===0){setMsg("❌ No hay registros válidos.");setUploading(false);return;}
+        setMsg("🗑️ Actualizando arribos...");
+        const oldSnap=await getDocs(collection(db,"transitos"));
+        if(oldSnap.docs.length>0){
+          const del=writeBatch(db);
+          oldSnap.docs.forEach(d=>del.delete(d.ref));
+          await del.commit();
+        }
+        const chunk=400;
+        for(let i=0;i<mapped.length;i+=chunk){
+          const batch=writeBatch(db);
+          mapped.slice(i,i+chunk).forEach((p,j)=>
+            batch.set(doc(collection(db,"transitos"),`t_${String(i+j).padStart(6,"0")}`),p));
+          await batch.commit();
+        }
+        const data=await fbGetTransitos();
+        if(data!==null) setTransitos(data);
+        setMsg(`✅ ${mapped.length} registros de arribos guardados.`);
+      }catch(err){setMsg("❌ ERROR: "+safe(err.message));}
+      setUploading(false);
+    };
+    reader.readAsText(file,"UTF-8");
+  }
+
   return(
     <div>
+      {admin&&<div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+        <div style={{flex:1,minWidth:180}}>
+          <div style={{fontWeight:700,fontSize:12,marginBottom:3}}>ACTUALIZAR ARRIBOS</div>
+          <div style={{color:GRL,fontSize:11}}>CSV UTF-8 — Columnas requeridas:</div>
+          <div style={{color:"#bbb",fontSize:10,marginTop:2}}>SKU, PRODUCTO, QTY, ETA (DD/MM/YYYY — fecha de arribo a PUERTO)</div>
+        </div>
+        <input type="file" accept=".csv,.tsv,.txt" ref={frefA} onChange={handleArribosFile} style={{display:"none"}}/>
+        <Btn onClick={()=>{setMsg("");frefA.current.click();}} disabled={uploading}>
+          {uploading?"SUBIENDO...":"SUBIR CSV"}
+        </Btn>
+        {msg&&<div style={{fontSize:11,width:"100%",padding:"8px 12px",borderRadius:4,
+          background:msg.startsWith("✅")?"#f0fdf4":msg.startsWith("❌")?"#fef2f2":"#fffbeb",
+          color:msg.startsWith("✅")?"#16a34a":msg.startsWith("❌")?"#dc2626":"#d97706",
+          border:`1px solid ${msg.startsWith("✅")?"#bbf7d0":msg.startsWith("❌")?"#fecaca":"#fde68a"}`}}>{msg}</div>}
+      </div>}
+
       <div style={{background:"#eff6ff",borderLeft:"3px solid #2563eb",border:"1px solid #bfdbfe",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
         <span style={{fontSize:16}}>🚢</span>
         <span style={{color:GRL,fontSize:11}}>
           Consulta los <strong style={{color:"#1a1a1a"}}>próximos arribos</strong> de producto.
-          La fecha a almacén es <strong style={{color:"#2563eb"}}>aproximada (+7 días desde puerto)</strong> y puede variar.
+          La fecha a CEDIS es <strong style={{color:"#2563eb"}}>aproximada (+8 días naturales desde puerto)</strong> y puede variar.
         </span>
       </div>
 
@@ -770,7 +830,7 @@ function ProximosArribos({db,mob}){
                   <div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
                   <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
                     <span style={{fontSize:10,color:GRL}}>⚓ Puerto: <strong style={{color:"#1a1a1a"}}>{a.eta||"—"}</strong></span>
-                    <span style={{fontSize:10,color:GRL}}>🏭 Almacén: <strong style={{color:"#2563eb"}}>{etaAlmacen(a.eta)}</strong></span>
+                    <span style={{fontSize:10,color:GRL}}>🏭 CEDIS: <strong style={{color:"#2563eb"}}>{etaAlmacen(a.eta)}</strong></span>
                   </div>
                 </div>
               ))}
@@ -780,7 +840,7 @@ function ProximosArribos({db,mob}){
               <thead><tr style={{background:"#f9f9f9"}}>
                 <th style={{padding:"7px 14px",textAlign:"right",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>CANTIDAD</th>
                 <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>⚓ ETA PUERTO</th>
-                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>🏭 ETA ALMACÉN (APROX.)</th>
+                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>🏭 ETA CEDIS (APROX.)</th>
               </tr></thead>
               <tbody>{g.arribos.map((a,j)=>(
                 <tr key={j} style={{borderTop:"1px solid #f3f4f6"}}>
@@ -1333,7 +1393,7 @@ export default function App(){
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
       {CartFab}
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["transitos","🚛 TRÁNSITOS"],["arribos","🚢 ARRIBOS"],
+        {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["arribos","🚢 ARRIBOS"],
           ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
           .map(([k,l])=>(
           <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
@@ -1442,9 +1502,7 @@ export default function App(){
 
         {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
 
-        {tab==="transitos"&&<Transitos session={session} db={db} mob={mob}/>}
-
-        {tab==="arribos"&&<ProximosArribos db={db} mob={mob}/>}
+        {tab==="arribos"&&<ProximosArribos session={session} db={db} mob={mob}/>}
 
         {tab==="settings"&&<div style={{maxWidth:520}}>
           <div style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:24,marginBottom:16}}>
