@@ -187,6 +187,11 @@ function smartMatch(q,p){
   const qc=cIn(q),qs=strp(qc);
   if(desc.includes(qc)||cod.includes(qc))return true;
   if(qs.length>=3&&(strp(desc).includes(qs)||strp(cod).includes(qs)))return true;
+  // Comparación ultra-normalizada: ignora también R y puntos
+  // (así "195L24" encuentra "19.5LR24", "19.5L-24" y "19.5LR-24" por igual)
+  const nrm=x=>strp(x).replace(/[R\.]/g,"");
+  const qn=nrm(qc);
+  if(qn.length>=4&&(nrm(desc).includes(qn)||nrm(cod).includes(qn)))return true;
   const qV=getVariants(qc),pVA=[];
   exMedidas(desc).forEach(m=>getVariants(m).forEach(v=>pVA.push(v)));
   return qV.some(qv=>qv&&qv.length>=2&&pVA.some(pv=>pv&&pv.length>=2&&(qv===pv||(qs.length>=3&&strp(pv).includes(qs)))));
