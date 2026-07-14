@@ -71,15 +71,34 @@ function etaSort(eta){
   return "9999-99-99";
 }
 
-// ETA a almacén = ETA puerto + 7 días
+// ¿El ETA indica que el producto ya está en puerto (ARRIBADO)?
+function yaArribado(eta){
+  const s=safe(eta).toUpperCase();
+  return /PUERTO|ARRIB|LLEG/.test(s)&&!/\d{1,2}\//.test(s);
+}
+
+// Texto a mostrar como ETA puerto
+function etaPuertoDisplay(eta){
+  return yaArribado(eta)?"ARRIBADO":(safe(eta)||"—");
+}
+
+// ETA a CEDIS:
+//  · Producto ARRIBADO en puerto (ETA dice PUERTO/ARRIBADO, sin fecha) → HOY + 5 días naturales
+//  · ETA con fecha de arribo a puerto → esa fecha + 8 días naturales
 function etaAlmacen(eta){
   const s=safe(eta);
+  const fmt=d=>d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+  if(yaArribado(s)){
+    const d=new Date();
+    d.setDate(d.getDate()+5);
+    return fmt(d);
+  }
   const m1=s.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/);
   if(m1){
     const d=new Date(Number(m1[3]),Number(m1[2])-1,Number(m1[1]));
     if(!isNaN(d.getTime())){
-      d.setDate(d.getDate()+7);
-      return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+      d.setDate(d.getDate()+8);
+      return fmt(d);
     }
   }
   const meses={ENE:0,FEB:1,MAR:2,ABR:3,MAY:4,JUN:5,JUL:6,AGO:7,SEP:8,OCT:9,NOV:10,DIC:11};
@@ -87,11 +106,11 @@ function etaAlmacen(eta){
   if(m2){
     const d=new Date(new Date().getFullYear(),meses[m2[2].toUpperCase()],Number(m2[1]));
     if(!isNaN(d.getTime())){
-      d.setDate(d.getDate()+7);
-      return d.toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
+      d.setDate(d.getDate()+8);
+      return fmt(d);
     }
   }
-  return "+7 días aprox.";
+  return "Por confirmar";
 }
 
 // ── Hash SHA-256 ──────────────────────────────────────────────
@@ -722,7 +741,11 @@ function ProximosArribos({session,db,mob}){
       if(!map[key]) map[key]={sku:t.sku,producto:t.producto,arribos:[]};
       map[key].arribos.push({qty:t.qty,eta:t.eta});
     });
-    return Object.values(map);
+    const arr=Object.values(map);
+    // Orden: ARRIBADO primero, luego fechas de más próxima a más lejana
+    arr.forEach(g=>g.arribos.sort((a,b)=>etaSort(a.eta).localeCompare(etaSort(b.eta))));
+    arr.sort((a,b)=>etaSort(a.arribos[0]?.eta).localeCompare(etaSort(b.arribos[0]?.eta)));
+    return arr;
   },[transitos,ds]);
 
   const totalPiezas=grouped.reduce((s,g)=>s+g.arribos.reduce((s2,a)=>s2+safeNum(a.qty),0),0);
@@ -773,7 +796,7 @@ function ProximosArribos({session,db,mob}){
         <div style={{flex:1,minWidth:180}}>
           <div style={{fontWeight:700,fontSize:12,marginBottom:3}}>ACTUALIZAR ARRIBOS</div>
           <div style={{color:GRL,fontSize:11}}>CSV UTF-8 — Columnas requeridas:</div>
-          <div style={{color:"#bbb",fontSize:10,marginTop:2}}>SKU, PRODUCTO, QTY, ETA (DD/MM/YYYY — fecha de arribo a PUERTO)</div>
+          <div style={{color:"#bbb",fontSize:10,marginTop:2}}>SKU, PRODUCTO, QTY, ETA (DD/MM/YYYY — fecha de arribo a PUERTO, o "PUERTO" si ya arribó)</div>
         </div>
         <input type="file" accept=".csv,.tsv,.txt" ref={frefA} onChange={handleArribosFile} style={{display:"none"}}/>
         <Btn onClick={()=>{setMsg("");frefA.current.click();}} disabled={uploading}>
@@ -789,7 +812,7 @@ function ProximosArribos({session,db,mob}){
         <span style={{fontSize:16}}>🚢</span>
         <span style={{color:GRL,fontSize:11}}>
           Consulta los <strong style={{color:"#1a1a1a"}}>próximos arribos</strong> de producto.
-          La fecha a CEDIS es <strong style={{color:"#2563eb"}}>aproximada (+8 días naturales desde puerto)</strong> y puede variar.
+          Fecha aproximada a CEDIS: producto <strong style={{color:"#16a34a"}}>ARRIBADO</strong> en puerto = <strong style={{color:"#2563eb"}}>hoy + 5 días</strong> · ETA con fecha = <strong style={{color:"#2563eb"}}>fecha de puerto + 8 días</strong>. Puede variar.
         </span>
       </div>
 
@@ -815,48 +838,47 @@ function ProximosArribos({session,db,mob}){
       </div>}
 
       {!loading&&ds.trim().length>=2&&grouped.map((g,i)=>(
-        <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:10,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
-          <div style={{background:"#fff7ed",padding:"10px 14px",borderBottom:"1px solid #fed7aa"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:8}}>
-              <div style={{fontSize:13,fontWeight:600,color:"#1a1a1a"}}>{g.producto}</div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontSize:11,color:GRL}}>{g.arribos.length} arribo{g.arribos.length!==1?"s":""}</div>
-                <div style={{fontSize:15,fontWeight:700,color:OR}}>{g.arribos.reduce((s,a)=>s+safeNum(a.qty),0).toLocaleString("es-MX")} pzas</div>
+        <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:10,marginBottom:12,overflow:"hidden",boxShadow:"0 2px 8px rgba(0,0,0,0.06)"}}>
+          {/* Encabezado: SKU + producto + total piezas */}
+          <div style={{background:"linear-gradient(90deg,#fff7ed,#ffedd5)",padding:mob?"12px 14px":"14px 18px",borderBottom:"1px solid #fed7aa"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:10}}>
+              <div style={{flex:1,minWidth:200}}>
+                {safe(g.sku)
+                  ?<span style={{fontFamily:"monospace",background:"#fff",border:"1.5px solid "+OR,color:OR,fontWeight:800,fontSize:mob?11:12,padding:"3px 10px",borderRadius:14,letterSpacing:0.5,display:"inline-block"}}>{g.sku}</span>
+                  :<span style={{background:"#fef3c7",color:"#d97706",border:"1px solid #fde68a",padding:"3px 10px",borderRadius:14,fontSize:11,fontWeight:800,letterSpacing:1,display:"inline-block"}}>🆕 CÓDIGO PENDIENTE</span>}
+                <div style={{fontSize:mob?14:16,fontWeight:700,color:"#1a1a1a",marginTop:6,lineHeight:1.3}}>{g.producto}</div>
+              </div>
+              <div style={{textAlign:"center",background:"#fff",border:"1px solid #fed7aa",borderRadius:8,padding:"6px 16px"}}>
+                <div style={{fontSize:9,color:GRL,letterSpacing:1,fontWeight:700}}>{g.arribos.length} ARRIBO{g.arribos.length!==1?"S":""}</div>
+                <div style={{fontSize:mob?18:22,fontWeight:800,color:OR,lineHeight:1.2}}>{g.arribos.reduce((s,a)=>s+safeNum(a.qty),0).toLocaleString("es-MX")}</div>
+                <div style={{fontSize:9,color:GRL,letterSpacing:1}}>PIEZAS</div>
               </div>
             </div>
           </div>
-          {mob?(
-            <div style={{padding:"8px 14px"}}>
-              {g.arribos.map((a,j)=>(
-                <div key={j} style={{padding:"8px 0",borderBottom:j<g.arribos.length-1?"1px solid #f3f4f6":"none"}}>
-                  <div style={{fontSize:13,fontWeight:700,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</div>
-                  <div style={{display:"flex",gap:12,marginTop:4,flexWrap:"wrap"}}>
-                    <span style={{fontSize:10,color:GRL}}>⚓ Puerto: <strong style={{color:"#1a1a1a"}}>{a.eta||"—"}</strong></span>
-                    <span style={{fontSize:10,color:GRL}}>🏭 CEDIS: <strong style={{color:"#2563eb"}}>{etaAlmacen(a.eta)}</strong></span>
+          {/* Detalle: cantidad + flujo PUERTO → CEDIS */}
+          <div>
+            {g.arribos.map((a,j)=>{
+              const arrib=yaArribado(a.eta);
+              return(
+                <div key={j} style={{display:"flex",alignItems:"center",gap:mob?10:16,padding:mob?"10px 14px":"12px 18px",borderTop:j>0?"1px solid #f3f4f6":"none",flexWrap:"wrap",background:arrib?"#f0fdf4":"transparent"}}>
+                  <div style={{minWidth:mob?74:96,fontSize:mob?15:17,fontWeight:800,color:"#16a34a"}}>
+                    {safeNum(a.qty).toLocaleString("es-MX")} <span style={{fontSize:11,fontWeight:700,color:GRL}}>pzas</span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:mob?8:12,flex:1,flexWrap:"wrap"}}>
+                    <div style={{background:arrib?"#16a34a":"#f0fdf4",border:"1px solid "+(arrib?"#16a34a":"#bbf7d0"),borderRadius:8,padding:"5px 12px",textAlign:"center"}}>
+                      <div style={{fontSize:9,fontWeight:700,letterSpacing:1,color:arrib?"rgba(255,255,255,0.85)":"#16a34a"}}>⚓ PUERTO</div>
+                      <div style={{fontSize:mob?12:13,fontWeight:800,color:arrib?"#fff":"#15803d"}}>{etaPuertoDisplay(a.eta)}</div>
+                    </div>
+                    <span style={{color:"#cbd5e1",fontSize:mob?14:18,fontWeight:700}}>→</span>
+                    <div style={{background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:8,padding:"5px 12px",textAlign:"center"}}>
+                      <div style={{fontSize:9,fontWeight:700,letterSpacing:1,color:"#2563eb"}}>🏭 CEDIS APROX.</div>
+                      <div style={{fontSize:mob?12:13,fontWeight:800,color:"#1d4ed8"}}>{etaAlmacen(a.eta)}</div>
+                    </div>
                   </div>
                 </div>
-              ))}
-            </div>
-          ):(
-            <table style={{width:"100%",borderCollapse:"collapse",fontSize:12}}>
-              <thead><tr style={{background:"#f9f9f9"}}>
-                <th style={{padding:"7px 14px",textAlign:"right",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>CANTIDAD</th>
-                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>⚓ ETA PUERTO</th>
-                <th style={{padding:"7px 14px",textAlign:"center",color:GRL,fontWeight:700,fontSize:10,letterSpacing:1}}>🏭 ETA CEDIS (APROX.)</th>
-              </tr></thead>
-              <tbody>{g.arribos.map((a,j)=>(
-                <tr key={j} style={{borderTop:"1px solid #f3f4f6"}}>
-                  <td style={{padding:"8px 14px",textAlign:"right",fontWeight:700,fontSize:13,color:"#16a34a"}}>{safeNum(a.qty).toLocaleString("es-MX")} pzas</td>
-                  <td style={{padding:"8px 14px",textAlign:"center"}}>
-                    <span style={{background:"#f0fdf4",color:"#16a34a",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{a.eta||"—"}</span>
-                  </td>
-                  <td style={{padding:"8px 14px",textAlign:"center"}}>
-                    <span style={{background:"#eff6ff",color:"#2563eb",padding:"3px 10px",borderRadius:20,fontSize:11,fontWeight:700}}>{etaAlmacen(a.eta)}</span>
-                  </td>
-                </tr>
-              ))}</tbody>
-            </table>
-          )}
+              );
+            })}
+          </div>
         </div>
       ))}
     </div>
