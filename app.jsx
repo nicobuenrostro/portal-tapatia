@@ -28,6 +28,7 @@ const BD   = "#e0e0e0";
 const ALMS   = ["gdl1","gdl3","ags","col","len","cul"];
 const ALMS_L = ["GDL1","GDL3","AGS","COL","LEN","CUL"];
 const LOGO_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
+const SUCURSALES = "Guadalajara · Colima · León · Aguascalientes · Culiacán";
 
 // ── Helpers ───────────────────────────────────────────────────
 const safe    = v => String(v??"").trim();
@@ -45,6 +46,43 @@ const getPrecio = (p,l) => {
   return safeNum(p.publico);
 };
 const clampDesc = v => Math.min(30,Math.max(0,Math.round(parseInt(v)||0)));
+
+// ── Redondeo comercial ────────────────────────────────────────
+// Regla: el precio ANTES de IVA puede llevar centavos; lo que debe cerrar en
+// pesos completos es el importe de cada línea (ya con IVA) y, por lo tanto,
+// el TOTAL a pagar. Se trabaja en centavos enteros para evitar el ruido de
+// punto flotante. El IVA se calcula por línea y se suma, igual que un CFDI.
+const mcd = (a,b) => b?mcd(b,a%b):a;
+
+// Sube el precio unitario los centavos mínimos para que el IMPORTE de la línea
+// (precio × cantidad, antes de IVA) caiga en pesos completos. El salto máximo
+// posible es de 99 centavos y el resultado es determinista, sin búsquedas.
+// Es idempotente: si la línea ya cierra, el precio no se mueve.
+function ajustaPrecio(precio,cantidad){
+  const q = Math.max(1,Math.round(safeNum(cantidad)));
+  const c = Math.round(safeNum(precio)*100);        // precio en centavos
+  if(c<=0) return 0;
+  const paso = 100/mcd(q,100);                      // mínimo salto que cierra
+  return (Math.ceil(c/paso)*paso)/100;
+}
+
+// Única fuente de verdad de los totales: la usan el carrito, el PDF y Firestore.
+// Resultado garantizado: subtotal, IVA, descuento y total en pesos completos.
+function calcCotizacion(items,descPct){
+  const its=(items||[]).map(it=>{
+    const q=Math.max(1,Math.round(safeNum(it.cantidad)));
+    const precio=ajustaPrecio(it.precio,q);
+    const impC=Math.round(precio*100)*q;            // múltiplo exacto de 100
+    return {...it,cantidad:q,precio,_impC:impC,_gravado:tieneIVA(it)};
+  });
+  const subC =its.reduce((s,i)=>s+i._impC,0);
+  const gravC=its.reduce((s,i)=>s+(i._gravado?i._impC:0),0);
+  const ivaC =Math.ceil(gravC*0.16/100)*100;        // IVA al peso completo
+  const d=clampDesc(descPct);
+  const descC=d>0?Math.round(subC*d/100/100)*100:0; // descuento al peso completo
+  return {items:its,subtotal:subC/100,ivaTotal:ivaC/100,
+          descMonto:descC/100,total:(subC+ivaC-descC)/100};
+}
 
 // IVA desde Firebase — campo "iva", valores: SI/NO, 1/0, TRUE/FALSE, 16/0
 const tieneIVA = p => {
@@ -283,6 +321,47 @@ function Pager({total,pg,setPg,ps=50}){
 }
 
 // ── PDF ───────────────────────────────────────────────────────
+// Rediseño premium multipágina. NO se modifica ningún cálculo comercial.
+// Tokens de diseño: una sola fuente de verdad para color, medida y tipografía.
+const PDFT = {
+  or:[255,107,6], orDk:[214,86,0], orSoft:[255,247,237],
+  ink:[26,26,26], head:[33,33,33],
+  gray:[108,108,108], grayL:[150,150,150],
+  bd:[224,224,224], soft:[247,247,247], zebra:[250,250,250],
+  white:[255,255,255], red:[190,32,32], blue:[37,99,235],
+};
+// Mostrar u ocultar la tarjeta de Tapatía Credit en el PDF (true / false)
+const MOSTRAR_CREDITO_PDF = true;
+// Geometría A4 — todo lo demás se deriva de aquí (garantiza alineación)
+const PG = { W:210, H:297, M:14 };
+PG.CW      = PG.W - PG.M*2;     // 182 mm de ancho de contenido
+PG.RIGHT   = PG.M + PG.CW;      // 196 mm  ← borde derecho único
+PG.LIMIT   = PG.H - 20;         // 277 mm  ← límite inferior de contenido
+PG.TOPCONT = 27;                // inicio en páginas 2+
+
+// Logo a color opcional (si algún día se sube al repo se usa automáticamente
+// sobre fondo blanco; si no existe, se usa el logo blanco sobre placa naranja)
+const LOGO_COLOR_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo-color.png";
+
+// Descarga una imagen y la devuelve como data URL (funciona en navegador y Node)
+async function fetchImgB64(url){
+  const resp = await fetch(url);
+  if(!resp.ok) throw new Error("HTTP "+resp.status);
+  const buf = await resp.arrayBuffer();
+  const bytes = new Uint8Array(buf);
+  let bin = "";
+  for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+  return "data:image/png;base64," + btoa(bin);
+}
+// Intenta el logo a color; si no existe, cae al logo blanco (requiere placa naranja)
+async function loadLogoPDF(){
+  try { return { b64: await fetchImgB64(LOGO_COLOR_URL), blanco:false }; }
+  catch(e){
+    try { return { b64: await fetchImgB64(LOGO_URL), blanco:true }; }
+    catch(e2){ return null; }
+  }
+}
+
 async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNombre}){
   const sfolio    = safe(folio)||"S/F";
   const snota     = safe(nota);
@@ -292,148 +371,272 @@ async function generarPDF({folio,session,items,nota,vigencia,descuento,clienteNo
   const snombre   = safe(session?.nombre)||"—";
   const sitems    = Array.isArray(items)?items:[];
   const fecha     = new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"long",year:"numeric"});
+  const fechaCorta= new Date().toLocaleDateString("es-MX",{day:"2-digit",month:"2-digit",year:"numeric"});
 
-  const doc2=new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
-  const W=210,M=15;
+  const doc2 = new jsPDF({orientation:"portrait",unit:"mm",format:"a4"});
+  const { M, CW, RIGHT, LIMIT, TOPCONT } = PG;
 
-  doc2.setFillColor(255,107,6); doc2.rect(0,0,W,42,"F");
+  // ── Cálculos comerciales: IDÉNTICOS a la versión anterior ──
+  const conIvaItems = sitems.filter(it=>tieneIVA(it));
+  const sinIvaItems = sitems.filter(it=>!tieneIVA(it));
+  const calc      = calcCotizacion(sitems,sdesc);
+  const litems    = calc.items;
+  const subtotal  = calc.subtotal;
+  const ivaTotal  = calc.ivaTotal;
+  const descMonto = calc.descMonto;
+  const total     = calc.total;
+  const mixto     = conIvaItems.length>0 && sinIvaItems.length>0;
 
-  try {
-    const resp=await fetch(LOGO_URL);
-    const blob=await resp.blob();
-    const b64=await new Promise((res,rej)=>{const r=new FileReader();r.onload=()=>res(r.result);r.onerror=rej;r.readAsDataURL(blob);});
-    const img=new Image();
-    await new Promise(r=>{img.onload=r;img.src=b64;});
-    const ratio=img.naturalWidth/img.naturalHeight;
-    const imgH=22, imgW=imgH*ratio;
-    doc2.addImage(b64,"PNG",M,4,imgW,imgH);
-  } catch(e){
-    doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
-    doc2.text("GRUPO TAPATÍA",M,16);
+  const logo = await loadLogoPDF();
+  let logoRatio = 3.34;
+  if(logo){ try{ const p=doc2.getImageProperties(logo.b64); logoRatio=p.width/p.height; }catch(e){} }
+
+  // ── Helpers de dibujo ──
+  const setF=(style,size,color)=>{doc2.setFont("helvetica",style);doc2.setFontSize(size);doc2.setTextColor(...color);};
+  const fill=(c)=>doc2.setFillColor(...c);
+  const stroke=(c,w)=>{doc2.setDrawColor(...c);doc2.setLineWidth(w||0.2);};
+  const card=(x,y,w,h,bg)=>{fill(bg||PDFT.soft);stroke(PDFT.bd,0.2);doc2.roundedRect(x,y,w,h,1.6,1.6,"FD");};
+  const hair=(y,x1,x2)=>{stroke(PDFT.bd,0.25);doc2.line(x1??M,y,x2??RIGHT,y);};
+
+  // ── Encabezado completo (solo página 1) ──
+  function headerFull(){
+    fill(PDFT.or); doc2.rect(0,0,PG.W,2.2,"F");
+    let tx=M;                                   // inicio del bloque de texto
+    if(logo&&!logo.blanco){
+      const h=26,w=h*logoRatio;                 // logo a color sobre fondo blanco
+      doc2.addImage(logo.b64,"PNG",M,6,w,h);
+      tx=M+w+7;
+    } else if(logo){
+      // Respaldo: el logo antiguo es blanco y necesita placa naranja
+      const h=12.5,w=h*logoRatio;
+      fill(PDFT.or); doc2.rect(0,0,M+w+9,27,"F");
+      doc2.addImage(logo.b64,"PNG",M,7,w,h);
+      tx=M+w+15;
+    } else {
+      setF("bold",15,PDFT.ink); doc2.text("COMERCIAL LLANTERA TAPATÍA",M,15);
+      tx=M; 
+    }
+    setF("normal",7,PDFT.ink);
+    doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques",tx,14);
+    setF("bold",6.3,PDFT.orDk);   doc2.text("SUCURSALES",tx,21);
+    setF("normal",6.8,PDFT.gray); doc2.text(SUCURSALES,tx+19,21);
+    setF("normal",6.6,PDFT.grayL);
+    doc2.text("Tlaquepaque, Jalisco  ·  ventas@llanteratapatia.com  ·  tapatia.app",tx,28);
+    // Tarjeta corporativa derecha
+    const cw=50,cx=RIGHT-cw;
+    card(cx,5,cw,27,PDFT.white);
+    fill(PDFT.or); doc2.rect(cx+1.6,5,cw-3.2,0.9,"F");
+    setF("bold",8.5,PDFT.or);   doc2.text("COTIZACIÓN",cx+cw/2,12,{align:"center"});
+    setF("bold",13,PDFT.ink);   doc2.text(sfolio,cx+cw/2,19.5,{align:"center"});
+    setF("normal",7.5,PDFT.gray);doc2.text(fecha,cx+cw/2,25.5,{align:"center"});
+    hair(36.5);
   }
 
-  doc2.setTextColor(255,255,255);doc2.setFontSize(7.5);doc2.setFont("helvetica","normal");
-  doc2.text("Importadores de llantas agrícolas, industriales, jardinería y remolques",M,28);
-  doc2.text("Tlaquepaque, Jalisco, México  |  ventas@llanteratapatia.com  |  www.tapatia.app",M,33);
-
-  doc2.setFillColor(210,75,0);doc2.rect(138,0,72,42,"F");
-  doc2.setTextColor(255,255,255);doc2.setFontSize(16);doc2.setFont("helvetica","bold");
-  doc2.text("COTIZACIÓN",174,14,{align:"center"});
-  doc2.setFontSize(11);doc2.text(sfolio,174,22,{align:"center"});
-  doc2.setFontSize(9);doc2.setFont("helvetica","normal");doc2.text(fecha,174,29,{align:"center"});
-
-  let y=50;
-  doc2.setFillColor(245,245,245);doc2.rect(M,y-4,W-M*2,26,"F");
-  doc2.setDrawColor(230,230,230);doc2.setLineWidth(0.3);doc2.rect(M,y-4,W-M*2,26);
-  doc2.setTextColor(OR);doc2.setFont("helvetica","bold");doc2.setFontSize(9);
-  doc2.text("DATOS DE COTIZACIÓN",M+2,y+1);y+=6;
-
-  const tf=(lbl,val,x1,x2)=>{
-    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.setFontSize(8.5);doc2.text(lbl,x1,y);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text(safe(val)||"—",x2,y);
-  };
-  tf("Folio:",sfolio,M+2,M+18);tf("Fecha:",fecha,100,116);y+=6;
-  tf("Elaboró:",snombre,M+2,M+20);tf("Vigencia:",svig,100,116);y+=6;
-  doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.setFontSize(8.5);doc2.text("Cliente:",M+2,y);
-  doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);
-  const clienteTxt=doc2.splitTextToSize(scliente,100)[0]||scliente;
-  doc2.text(clienteTxt,M+20,y);
-
-  const conIvaItems=sitems.filter(it=>tieneIVA(it));
-  const sinIvaItems=sitems.filter(it=>!tieneIVA(it));
-  y+=10;
-  if(conIvaItems.length===0){
-    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(220,38,38);
-    doc2.text("Productos sin IVA",M,y);
-  } else if(sinIvaItems.length===0){
-    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(37,99,235);
-    doc2.text("Productos con IVA (16%)",M,y);
-  } else {
-    doc2.setFont("helvetica","bold");doc2.setFontSize(8);doc2.setTextColor(80,80,80);
-    doc2.text("Cotización con productos mixtos (con y sin IVA)",M,y);
+  // ── Encabezado reducido (páginas 2+) ──
+  function headerCont(){
+    fill(PDFT.or); doc2.rect(0,0,PG.W,1.6,"F");
+    if(logo&&!logo.blanco){
+      const h=15,w=h*logoRatio;
+      doc2.addImage(logo.b64,"PNG",M,4.5,w,h);
+    } else if(logo){
+      const h=7.5,w=h*logoRatio;
+      fill(PDFT.or); doc2.rect(0,0,M+w+8,15,"F");
+      doc2.addImage(logo.b64,"PNG",M,4,w,h);
+    } else {
+      setF("bold",9,PDFT.ink); doc2.text("COMERCIAL LLANTERA TAPATÍA",M,10);
+    }
+    setF("bold",9,PDFT.ink);
+    doc2.text(`COTIZACIÓN ${sfolio}`,RIGHT,11,{align:"right"});
+    setF("normal",7,PDFT.gray);
+    const cli=doc2.splitTextToSize(`Continuación · ${scliente}`,110)[0];
+    doc2.text(cli,RIGHT,15.5,{align:"right"});
+    hair(21.5);
   }
-  y+=4;
 
-  const rows=sitems.map((it,i)=>[
+  // ── Pie de página (idéntico en todas las páginas) ──
+  function footer(p,totalP){
+    hair(281);
+    setF("normal",6.8,PDFT.gray);
+    doc2.text(`Comercial Llantera Tapatía SA de CV   ·   tapatia.app   ·   ${sfolio}   ·   ${fechaCorta}`,M,285.5);
+    setF("bold",6.8,PDFT.gray);
+    doc2.text(`Página ${p} de ${totalP}`,RIGHT,285.5,{align:"right"});
+  }
+
+  headerFull();
+  let y = 40;
+
+  // ── Tarjeta: datos de cotización (2 columnas, oculta campos vacíos) ──
+  const campos=[["CLIENTE",scliente],["VIGENCIA",svig],["ELABORÓ",snombre]];
+  if(sdesc>0) campos.push(["DESCUENTO APLICADO",`${sdesc}%`]);
+  const campVis=campos.filter(([,v])=>safe(v)!=="" && safe(v)!=="—");
+  const nRows=Math.ceil(campVis.length/2);
+  const cardH=5+nRows*9.5;
+  card(M,y,CW,cardH,PDFT.soft);
+  const colX=[M+5,M+CW/2+3];
+  campVis.forEach(([lbl,val],i)=>{
+    const cx=colX[i%2], ry=y+6.5+Math.floor(i/2)*9.5;
+    setF("normal",6.4,PDFT.grayL); doc2.text(lbl,cx,ry);
+    setF("bold",9,PDFT.ink);
+    doc2.text(doc2.splitTextToSize(safe(val),CW/2-9)[0],cx,ry+4.6);
+  });
+  y += cardH+5;
+
+  // ── Franja informativa de IVA ──
+  const avisoIVA = sinIvaItems.length===0
+    ? "Todos los productos causan IVA. Los precios mostrados son antes de IVA; el 16% se desglosa en el resumen."
+    : conIvaItems.length===0
+      ? "Los productos de esta cotización no causan IVA. Los precios mostrados son precios finales."
+      : "Cotización mixta: incluye productos gravados y productos exentos de IVA (marcados con *).";
+  const avisoCol = sinIvaItems.length===0?PDFT.blue:conIvaItems.length===0?PDFT.red:PDFT.orDk;
+  fill(PDFT.orSoft); stroke(PDFT.bd,0.2); doc2.rect(M,y,CW,7.5,"FD");
+  fill(avisoCol); doc2.rect(M,y,1.3,7.5,"F");
+  setF("normal",7.2,PDFT.gray); doc2.text(avisoIVA,M+5,y+4.9);
+  y += 7.5+5;
+
+  // ── Tabla de productos: UNA sola tabla, anchos derivados de CW = 100% ──
+  const pct = p => +(CW*p/100).toFixed(3);
+  const COLS = { no:5, cod:15, desc:42, cant:8, unit:15, imp:15 }; // suma = 100
+  const rows = litems.map((it,i)=>[
     i+1,
-    safe(it.codigo)||"—",
+    (safe(it.codigo)||"—")+((mixto&&!tieneIVA(it))?" *":""),
     safe(it.descripcion)||"—",
-    safeNum(it.cantidad),
+    it.cantidad,
     money2(it.precio),
-    money2(safeNum(it.precio)*safeNum(it.cantidad)),
+    money2(it._impC/100),
   ]);
 
   doc2.autoTable({
     startY:y,
-    head:[["No.","CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"]],
+    head:[["#","CÓDIGO","DESCRIPCIÓN","CANT.","P. UNIT.","IMPORTE"]],
     body:rows,
-    margin:{left:M,right:M},
-    headStyles:{fillColor:[255,107,6],textColor:255,fontStyle:"bold",fontSize:8,halign:"center"},
-    bodyStyles:{fontSize:7.5,textColor:[40,40,40]},
-    columnStyles:{0:{halign:"center",cellWidth:8},1:{cellWidth:28},2:{cellWidth:82},3:{halign:"center",cellWidth:14},4:{halign:"right",cellWidth:26},5:{halign:"right",cellWidth:26}},
-    alternateRowStyles:{fillColor:[250,250,250]},
-    tableLineColor:[220,220,220],tableLineWidth:0.1,
+    margin:{left:M,right:M,top:TOPCONT,bottom:20},
+    tableWidth:CW,
+    showHead:"everyPage",      // ≡ thead { display: table-header-group }
+    rowPageBreak:"avoid",      // ≡ tr { break-inside: avoid }
+    styles:{font:"helvetica",fontSize:8,cellPadding:{top:2.3,bottom:2.3,left:2.6,right:2.6},
+            overflow:"linebreak",valign:"middle",lineColor:PDFT.bd,lineWidth:0.1,textColor:[45,45,45]},
+    headStyles:{fillColor:PDFT.head,textColor:PDFT.white,fontStyle:"bold",fontSize:8,
+                cellPadding:{top:2.8,bottom:2.8,left:2.6,right:2.6},lineWidth:0},
+    alternateRowStyles:{fillColor:PDFT.zebra},
+    columnStyles:{
+      0:{cellWidth:pct(COLS.no),  halign:"center",textColor:PDFT.grayL,
+         cellPadding:{top:2.3,bottom:2.3,left:1,right:1},overflow:"visible"},
+      1:{cellWidth:pct(COLS.cod), halign:"left"},
+      2:{cellWidth:pct(COLS.desc),halign:"left"},
+      3:{cellWidth:pct(COLS.cant),halign:"center",fontStyle:"bold"},
+      4:{cellWidth:pct(COLS.unit),halign:"right",overflow:"visible"},
+      5:{cellWidth:pct(COLS.imp), halign:"right",fontStyle:"bold",textColor:PDFT.ink,overflow:"visible"},
+    },
+    didParseCell:d=>{ if(d.section==="head"&&(d.column.index===4||d.column.index===5)) d.cell.styles.halign="right";
+                      if(d.section==="head"&&d.column.index===3) d.cell.styles.halign="center";
+                      if(d.section==="head"&&d.column.index===0) d.cell.styles.halign="center"; },
+    didDrawPage:()=>{ if(doc2.internal.getCurrentPageInfo().pageNumber>1) headerCont(); },
   });
 
-  const subtotal=sitems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad),0);
-  const ivaTotal=conIvaItems.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad)*0.16,0);
-  const descMonto=sdesc>0?subtotal*(sdesc/100):0;
-  const total=subtotal+ivaTotal-descMonto;
+  y = doc2.lastAutoTable.finalY + 5;
 
-  const fy=doc2.lastAutoTable.finalY+5;
-  const bx=118,bw=77;let ty=fy;
-  const numRows=sdesc>0?3:2;
-  doc2.setFillColor(248,248,248);doc2.rect(bx,ty-2,bw,numRows*6.5+4,"F");
-  doc2.setDrawColor(220,220,220);doc2.setLineWidth(0.2);doc2.rect(bx,ty-2,bw,numRows*6.5+4);
+  // Reserva espacio completo o pasa el bloque íntegro a la siguiente página
+  // (equivalente funcional de break-inside: avoid)
+  const ensure = h => { if(y+h>LIMIT){ doc2.addPage(); headerCont(); y=TOPCONT; } };
 
-  const trow=(lbl,val,color)=>{
-    doc2.setFont("helvetica","normal");doc2.setFontSize(8.5);doc2.setTextColor(...(color||[80,80,80]));doc2.text(lbl,bx+2,ty+4);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(...(color||[30,30,30]));doc2.text(val,bx+bw-2,ty+4,{align:"right"});
-    ty+=6.5;
-  };
-  trow("Subtotal:",money2(subtotal));
-  trow("IVA:",money2(ivaTotal),ivaTotal===0?[150,150,150]:[37,99,235]);
-  if(sdesc>0) trow(`Descuento (${sdesc}%):`,"-"+money2(descMonto),[200,30,30]);
+  if(mixto){
+    setF("normal",6.6,PDFT.gray);
+    doc2.text("*  Producto exento de IVA.",M,y+1);
+    y += 5;
+  }
 
-  doc2.setDrawColor(255,107,6);doc2.setLineWidth(0.6);doc2.line(bx,ty+2,bx+bw,ty+2);
-  doc2.setFillColor(255,107,6);doc2.rect(bx,ty+3,bw,9,"F");
-  doc2.setTextColor(255,255,255);doc2.setFont("helvetica","bold");doc2.setFontSize(11);
-  doc2.text("TOTAL:",bx+3,ty+9.5);
-  doc2.text(money2(total),bx+bw-2,ty+9.5,{align:"right"});
+  // ── Bloque de cierre ──────────────────────────────────────
+  // Se mide completo ANTES de dibujar. Si no cabe entero, pasa completo a la
+  // siguiente página: así nunca queda una página final con un bloque huérfano.
+  doc2.setFont("helvetica","normal");doc2.setFontSize(7.6);
+  const notaLines = snota?doc2.splitTextToSize(snota,CW-10):[];
+  const hNota  = snota?(9+notaLines.length*3.8)+5:0;
+  const hTot   = (sdesc>0?3:2)*6.6+4+11.5+6;
+  const hCred  = MOSTRAR_CREDITO_PDF?20:0;
+  const hBank  = 32;
+  const hCond  = 15;
+  const hCola  = hCred+hBank+hCond;   // tramo final indivisible
 
+  // ── Resumen de totales (bloque indivisible, alineado al borde derecho) ──
+  const filas=[["Subtotal",money2(subtotal),PDFT.gray,PDFT.ink],
+               ["IVA (16%)",money2(ivaTotal),ivaTotal===0?PDFT.grayL:PDFT.blue,ivaTotal===0?PDFT.grayL:PDFT.blue]];
+  if(sdesc>0) filas.push([`Descuento (${sdesc}%)`,"-"+money2(descMonto),PDFT.red,PDFT.red]);
+  const TW=76, TX=RIGHT-TW, filaH=6.6, totH=11.5;
+  const totalCardH=4+filas.length*filaH+totH;
+  ensure(hTot);
+  card(TX,y,TW,filas.length*filaH+4,PDFT.white);
+  let ty=y+3;
+  filas.forEach(([lbl,val,cl,cv])=>{
+    setF("normal",8.4,cl); doc2.text(lbl,TX+4,ty+3.6);
+    setF("bold",8.6,cv);   doc2.text(val,TX+TW-4,ty+3.6,{align:"right"});
+    ty+=filaH;
+  });
+  fill(PDFT.or); doc2.roundedRect(TX,ty+1,TW,totH,1.6,1.6,"F");
+  setF("bold",10.5,PDFT.white); doc2.text("TOTAL",TX+4,ty+8.4);
+  setF("bold",12,PDFT.white);   doc2.text(money2(total),TX+TW-4,ty+8.6,{align:"right"});
+  y = ty+1+totH+6;
+
+  // ── Observaciones (opcional, indivisible) ──
   if(snota){
-    const ny=ty+18;
-    if(ny<260){
-      doc2.setTextColor(60,60,60);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
-      doc2.text("OBSERVACIONES:",M,ny);
-      doc2.setFont("helvetica","normal");doc2.setFontSize(7.5);
-      doc2.text(doc2.splitTextToSize(snota,W-M*2-5),M,ny+5);
-    }
+    const lines=notaLines;
+    const h=9+lines.length*3.8;
+    ensure(hNota);
+    card(M,y,CW,h,PDFT.soft);
+    setF("bold",7.2,PDFT.orDk); doc2.text("OBSERVACIONES",M+5,y+5.5);
+    setF("normal",7.6,PDFT.gray); doc2.text(lines,M+5,y+10.5);
+    y += h+5;
   }
 
-  const by=ty+20+(snota?12:0);
-  if(by<260){
-    doc2.setFillColor(245,245,245);doc2.rect(M,by,W-M*2,20,"F");
-    doc2.setDrawColor(220,220,220);doc2.rect(M,by,W-M*2,20);
-    doc2.setTextColor(OR);doc2.setFont("helvetica","bold");doc2.setFontSize(8);
-    doc2.text("DATOS PARA DEPÓSITO / TRANSFERENCIA",M+2,by+5);
-    doc2.setFontSize(7.5);
-    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("Banco:",M+2,by+11);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("BBVA",M+16,by+11);
-    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("Titular:",100,by+11);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("Comercial Llantera Tapatía SA de CV",118,by+11);
-    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("No. Cuenta:",M+2,by+17);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("0154483138",M+26,by+17);
-    doc2.setFont("helvetica","normal");doc2.setTextColor(80,80,80);doc2.text("CLABE:",100,by+17);
-    doc2.setFont("helvetica","bold");doc2.setTextColor(30,30,30);doc2.text("012320001544831389",118,by+17);
+  // ── Tramo final: crédito + banco + condiciones viajan juntos ──
+  ensure(hCola);
+
+  // ── Tapatía Credit (tarjeta secundaria, ocultable) ──
+  if(MOSTRAR_CREDITO_PDF){
+    const h=15;
+    card(M,y,CW,h,PDFT.white);
+    fill(PDFT.or); doc2.roundedRect(M,y,1.8,h,1.6,1.6,"F");
+    setF("bold",8.5,PDFT.or);  doc2.text("TAPATÍA CREDIT",M+6,y+6);
+    setF("normal",7.4,PDFT.gray);
+    doc2.text("Hasta 90 días de crédito.  ·  Consulta requisitos con tu asesor.  ·  Sujeto a autorización.",M+6,y+11);
+    y += h+5;
   }
 
-  doc2.setFillColor(255,107,6);doc2.rect(0,282,W,15,"F");
-  doc2.setTextColor(255,255,255);doc2.setFont("helvetica","bold");doc2.setFontSize(7.5);
-  doc2.text("Precios sujetos a cambio sin previo aviso. Sujeto a disponibilidad.",W/2,286,{align:"center"});
-  doc2.setFont("helvetica","normal");
-  doc2.text("Esta cotización es informativa y no constituye un pedido, factura ni compromiso de entrega.",W/2,290,{align:"center"});
-  doc2.text(`Grupo Tapatía  |  tapatia.app  |  ${fecha}`,W/2,294,{align:"center"});
+  // ── Datos bancarios (indivisible — antes se omitían si no cabían) ──
+  {
+    const h=27;
+    ensure(h+4);
+    card(M,y,CW,h,PDFT.soft);
+    setF("bold",7.6,PDFT.orDk); doc2.text("DATOS PARA DEPÓSITO O TRANSFERENCIA",M+5,y+6);
+    const c1=M+5, c2=M+CW/2+3;
+    setF("normal",6.6,PDFT.grayL); doc2.text("BANCO",c1,y+12);
+    setF("bold",9,PDFT.ink);       doc2.text("BBVA",c1,y+16.4);
+    setF("normal",6.6,PDFT.grayL); doc2.text("TITULAR",c2,y+12);
+    setF("bold",8.4,PDFT.ink);     doc2.text("Comercial Llantera Tapatía SA de CV",c2,y+16.4);
+    setF("normal",6.6,PDFT.grayL); doc2.text("No. DE CUENTA",c1,y+20.5);
+    doc2.setFont("courier","bold");doc2.setFontSize(10);doc2.setTextColor(...PDFT.ink);
+    doc2.text("0154483138",c1+29,y+20.9);
+    setF("normal",6.6,PDFT.grayL); doc2.text("CLABE",c2,y+20.5);
+    doc2.setFont("courier","bold");doc2.setFontSize(10);doc2.setTextColor(...PDFT.ink);
+    doc2.text("012320001544831389",c2+16,y+20.9);
+    setF("normal",6.2,PDFT.gray);
+    doc2.text("Verifica que el beneficiario sea COMERCIAL LLANTERA TAPATÍA SA DE CV antes de realizar el pago.",M+5,y+24.8);
+    y += h+5;
+  }
+
+  // ── Condiciones comerciales (indivisible) ──
+  {
+    const h=13;
+    ensure(h+2);
+    hair(y);
+    setF("bold",6.6,PDFT.grayL); doc2.text("CONDICIONES COMERCIALES",M,y+4.5);
+    setF("normal",6.8,PDFT.gray);
+    doc2.text("Precios sujetos a cambio sin previo aviso.  ·  Sujeto a disponibilidad.  ·  Vigencia: "+svig+".",M,y+8.5);
+    doc2.text("Esta cotización es informativa y no constituye pedido, factura ni compromiso de entrega.",M,y+11.8);
+  }
+
+  // ── Pies de página: una sola pasada final con el total real de páginas ──
+  const totalP=doc2.internal.getNumberOfPages();
+  for(let p=1;p<=totalP;p++){ doc2.setPage(p); footer(p,totalP); }
 
   doc2.save(`Cotizacion_${sfolio}.pdf`);
 }
@@ -448,11 +651,9 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
   const [generating,setGenerating]=useState(false);
   const [folioMsg,setFolioMsg]=useState("");
 
-  const subtotal=cart.reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad),0);
-  const ivaTotal=cart.filter(it=>tieneIVA(it)).reduce((s,it)=>s+safeNum(it.precio)*safeNum(it.cantidad)*0.16,0);
   const descPct=clampDesc(descuento);
-  const descMonto=vend&&descPct>0?subtotal*(descPct/100):0;
-  const total=subtotal+ivaTotal-descMonto;
+  const calc=calcCotizacion(cart,vend?descPct:0);
+  const {subtotal,ivaTotal,descMonto,total}=calc;
 
   function updCantidad(idx,val){const n=Math.max(1,parseInt(val)||1);setCart(prev=>prev.map((it,i)=>i===idx?{...it,cantidad:n}:it));}
   function updPrecio(idx,tipo){
@@ -483,10 +684,12 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
       setFolioMsg(`📄 ${folio} — generando PDF...`);
       const descReal=vend?descPct:0;
       const nombreCliente=safe(clienteNombre)||"Público en general";
-      await generarPDF({folio,session,items:cart,nota,vigencia,descuento:descReal,clienteNombre:nombreCliente});
+      // Los precios se guardan ya ajustados para que la reimpresión sea idéntica
+      const itemsFinales=calcCotizacion(cart,descReal).items.map(({_impC,_ivaC,...it})=>it);
+      await generarPDF({folio,session,items:itemsFinales,nota,vigencia,descuento:descReal,clienteNombre:nombreCliente});
       await setDoc(doc(db,"cotizaciones",folio),{
         folio,usuario:safe(session?.usuario),nombre:safe(session?.nombre),
-        empresa:safe(session?.empresa),items:cart,
+        empresa:safe(session?.empresa),items:itemsFinales,
         subtotal,ivaTotal,descuento:descReal,total,
         clienteNombre:nombreCliente,nota:safe(nota),vigencia:safe(vigencia),
         fecha:new Date().toISOString(),
@@ -515,7 +718,7 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
           {cart.length===0&&<div style={{textAlign:"center",color:GRL,padding:40,fontSize:13}}>
             Agrega productos con el botón <strong style={{color:OR}}>＋</strong> en el catálogo
           </div>}
-          {cart.map((it,i)=>{
+          {calc.items.map((it,i)=>{
             const conIvaItem=tieneIVA(it);
             return(
               <div key={i} style={{border:"1px solid #e5e7eb",borderRadius:6,padding:12,marginBottom:10,background:"#fafafa"}}>
@@ -547,7 +750,7 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
                   )}
                   <div style={{marginLeft:"auto",textAlign:"right"}}>
                     <div style={{fontSize:11,color:GRL}}>P. Unit: <strong style={{color:"#1a1a1a"}}>{money2(it.precio)}</strong></div>
-                    <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(safeNum(it.precio)*safeNum(it.cantidad))}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:OR}}>Importe: {money2(it._impC/100)}</div>
                   </div>
                 </div>
               </div>
@@ -1381,7 +1584,10 @@ export default function App(){
   const Hdr=session&&<div style={{background:OR,borderBottom:"2px solid #e05500",padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}}>
     <div style={{display:"flex",alignItems:"center",gap:12}}>
       <Logo h={mob?32:44}/>
-      {!mob&&<><div style={{width:1,height:24,background:"rgba(255,255,255,0.3)"}}/><span style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{isAdminRole(session)?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</span></>}
+      {!mob&&<><div style={{width:1,height:30,background:"rgba(255,255,255,0.3)"}}/><div>
+        <div style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{isAdminRole(session)?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</div>
+        <div style={{color:"rgba(255,255,255,0.75)",fontSize:9,letterSpacing:0.5,marginTop:2}}>SUCURSALES: {SUCURSALES}</div>
+      </div></>}
     </div>
     <div style={{display:"flex",alignItems:"center",gap:10}}>
       {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#fff",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{session.empresa}</div>}</div>}
