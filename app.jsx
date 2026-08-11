@@ -29,6 +29,8 @@ const ALMS   = ["gdl1","gdl3","ags","col","len","cul"];
 const ALMS_L = ["GDL1","GDL3","AGS","COL","LEN","CUL"];
 const LOGO_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo.png";
 const SUCURSALES = "Guadalajara · Colima · León · Aguascalientes · Culiacán";
+// Logo a color para fondos claros; si faltara, se cae al logo blanco
+const LOGO_COLOR_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo-color.png";
 
 // ── Helpers ───────────────────────────────────────────────────
 const safe    = v => String(v??"").trim();
@@ -252,15 +254,35 @@ function canDo(session,accion){
 }
 function isAdminRole(s){ return s?.rol==="admin"||s?.rol==="superadmin"; }
 function isVendedor(s){ return s?.lista==="VENDEDOR"||isAdminRole(s); }
+// Personal interno: ve el historial completo, no solo lo suyo
+const esInterno = s => isVendedor(s);
 
+// Separa respetando comillas: una descripción con coma ya no corre las columnas
+function splitLine(line,delim){
+  const out=[];let cur="",q=false;
+  for(let i=0;i<line.length;i++){
+    const ch=line[i];
+    if(ch==='"'){q=!q;continue;}
+    if(ch===delim&&!q){out.push(cur);cur="";continue;}
+    cur+=ch;
+  }
+  out.push(cur);return out;
+}
+// Normaliza encabezados: "DESCRIPCIÓN", "descripcion" y "IVA " son la misma llave
+const sinAcentos = t => String(t??"").normalize("NFD").replace(/[\u0300-\u036f]/g,"");
+const hdrKey = h => sinAcentos(h).toUpperCase().replace(/[^A-Z0-9]/g,"");
+const pick = (row,...alias) => {
+  for(const a of alias){const k=hdrKey(a);if(row[k]!==undefined&&row[k]!=="")return row[k];}
+  return "";
+};
 function parseCsv(text){
-  const lines=text.trim().split(/\r?\n/);
+  const lines=text.replace(/^\uFEFF/,"").trim().split(/\r?\n/);
   if(lines.length<2) return [];
   const first=lines[0];
-  const delim=first.includes("\t")?"\t":first.includes(";")?";":","
-  const headers=first.split(delim).map(h=>h.trim().replace(/"/g,""));
+  const delim=first.includes("\t")?"\t":first.includes(";")?";":",";
+  const headers=splitLine(first,delim).map(h=>hdrKey(h.trim()));
   return lines.slice(1).map(line=>{
-    const vals=line.split(delim),obj={};
+    const vals=splitLine(line,delim),obj={};
     headers.forEach((h,i)=>{const v=safe(vals[i]??"");obj[h]=(!isNaN(v)&&v!=="")?parseFloat(v):v;});
     return obj;
   }).filter(r=>Object.values(r).some(v=>v!==""&&v!==undefined));
@@ -272,10 +294,10 @@ function Badge({val}){
   const s=map[val]||{bg:"#f3f4f6",c:GRL};
   return <span style={{background:s.bg,color:s.c,padding:"2px 8px",borderRadius:3,fontSize:10,fontWeight:700,letterSpacing:1}}>{val}</span>;
 }
-function Inp({label,value,onChange,type="text",mb=12,placeholder=""}){
+function Inp({label,value,onChange,type="text",mb=12,placeholder="",onKeyDown,autoFocus}){
   return <div style={{marginBottom:mb}}>
     {label&&<div style={{color:GRL,fontSize:10,letterSpacing:2,marginBottom:4}}>{label}</div>}
-    <input type={type} value={value} onChange={onChange} placeholder={placeholder}
+    <input type={type} value={value} onChange={onChange} placeholder={placeholder} onKeyDown={onKeyDown} autoFocus={autoFocus}
       style={{width:"100%",padding:"9px 11px",background:"#f7f7f7",border:"1px solid "+BD,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
   </div>;
 }
@@ -288,17 +310,23 @@ function Btn({onClick,children,danger,ghost,sm,disabled}){
     {children}
   </button>;
 }
-function Logo({h=36}){
-  return <img src={LOGO_URL} alt="Grupo Tapatía" style={{height:h,objectFit:"contain",maxWidth:280}}
-    onError={e=>{e.target.style.display="none";}}/>;
+function Logo({h=36,color}){
+  return <img src={color?LOGO_COLOR_URL:LOGO_URL} alt="Comercial Llantera Tapatía"
+    style={{height:h,objectFit:"contain",maxWidth:280,display:"block"}}
+    onError={e=>{if(color&&e.target.src!==LOGO_URL){e.target.src=LOGO_URL;}else{e.target.style.display="none";}}}/>;
 }
 function Buscador({search,ds,onChange,count,mob}){
   const tipo=ds.trim().length>=2?detectTipo(ds.trim()):"";
   const norm=ds.trim().length>=2?(getVariants(ds.trim())[0]||""):"";
   return <div style={{marginBottom:14}}>
-    <input value={search} onChange={e=>onChange(e.target.value)}
-      placeholder={mob?"Buscar medida o código...":"Buscar: código, descripción o medida (ej: 15538, 315/80R22.5, 10.00-20)..."}
-      style={{width:"100%",padding:"10px 13px",background:"#f7f7f7",border:"1.5px solid "+OR,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+    <div style={{position:"relative"}}>
+      <input value={search} onChange={e=>onChange(e.target.value)} autoFocus={!mob}
+        onKeyDown={e=>{if(e.key==="Escape")onChange("");}}
+        placeholder={mob?"Buscar medida o código...":"Buscar: código, descripción o medida (ej: 15538, 315/80R22.5, 10.00-20)..."}
+        style={{width:"100%",padding:"10px 36px 10px 13px",background:"#f7f7f7",border:"1.5px solid "+OR,color:"#1a1a1a",fontSize:13,borderRadius:4,boxSizing:"border-box",outline:"none"}}/>
+      {search&&<button onClick={()=>onChange("")} title="Limpiar búsqueda"
+        style={{position:"absolute",right:6,top:"50%",transform:"translateY(-50%)",background:"#e5e7eb",border:"none",color:GRL,width:22,height:22,borderRadius:"50%",cursor:"pointer",fontSize:12,fontWeight:700,lineHeight:1}}>✕</button>}
+    </div>
     {ds.trim().length>=2&&<div style={{display:"flex",gap:8,marginTop:5,flexWrap:"wrap",alignItems:"center"}}>
       {tipo&&<span style={{background:"#fff7ed",color:OR,padding:"2px 8px",borderRadius:3,fontSize:10,fontWeight:700}}>{tipo}</span>}
       {norm&&norm!==ds.trim().toUpperCase()&&<span style={{color:GRL,fontSize:10}}>→ <strong style={{color:"#1a1a1a"}}>{norm}</strong></span>}
@@ -341,7 +369,6 @@ PG.TOPCONT = 27;                // inicio en páginas 2+
 
 // Logo a color opcional (si algún día se sube al repo se usa automáticamente
 // sobre fondo blanco; si no existe, se usa el logo blanco sobre placa naranja)
-const LOGO_COLOR_URL = "https://raw.githubusercontent.com/nicobuenrostro/portal-tapatia/main/logo-color.png";
 
 // Descarga una imagen y la devuelve como data URL (funciona en navegador y Node)
 async function fetchImgB64(url){
@@ -818,17 +845,20 @@ function CartPanel({cart,setCart,session,db,onClose,mob}){
 }
 
 // ── Historial de cotizaciones ─────────────────────────────────
-function HistorialCotizaciones({session,db,mob}){
+function HistorialCotizaciones({session,db,mob,onReabrir}){
   const [cots,setCots]=useState([]);
   const [loading,setLoading]=useState(true);
   const [expanded,setExpanded]=useState(null);
+  const [fVend,setFVend]=useState("");
+  const [fTexto,setFTexto]=useState("");
   const admin=isAdminRole(session);
+  const interno=esInterno(session);
 
   useEffect(()=>{
     let mounted=true;
     (async()=>{
       setLoading(true);
-      const data=await fbGetCotizaciones(session?.usuario,admin);
+      const data=await fbGetCotizaciones(session?.usuario,interno);
       if(mounted&&data!==null) setCots(data);
       if(mounted) setLoading(false);
     })();
@@ -856,10 +886,32 @@ function HistorialCotizaciones({session,db,mob}){
     </div>
   );
 
+  const vendedores=[...new Set(cots.map(c=>safe(c.nombre)).filter(Boolean))].sort();
+  const vistas=cots.filter(c=>{
+    if(fVend&&safe(c.nombre)!==fVend) return false;
+    const q=safe(fTexto).toUpperCase();
+    if(!q) return true;
+    return [c.folio,c.clienteNombre,c.nombre,c.empresa].some(v=>safe(v).toUpperCase().includes(q));
+  });
+
   return(
     <div>
-      <div style={{marginBottom:12,color:GRL,fontSize:11}}>{cots.length} cotización{cots.length!==1?"es":""}</div>
-      {cots.map(cot=>{
+      {interno&&cots.length>0&&<div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap",alignItems:"center"}}>
+        <select value={fVend} onChange={e=>setFVend(e.target.value)}
+          style={{padding:"8px 10px",border:"1px solid "+BD,borderRadius:4,fontSize:12,background:"#fff",outline:"none",minWidth:150}}>
+          <option value="">Todos los vendedores</option>
+          {vendedores.map(v=><option key={v} value={v}>{v}</option>)}
+        </select>
+        <input value={fTexto} onChange={e=>setFTexto(e.target.value)} placeholder="Buscar folio o cliente..."
+          style={{flex:1,minWidth:160,padding:"8px 10px",border:"1px solid "+BD,borderRadius:4,fontSize:12,outline:"none",boxSizing:"border-box"}}/>
+        {(fVend||fTexto)&&<Btn ghost sm onClick={()=>{setFVend("");setFTexto("");}}>LIMPIAR</Btn>}
+      </div>}
+      <div style={{marginBottom:12,color:GRL,fontSize:11}}>
+        {vistas.length} de {cots.length} cotización{cots.length!==1?"es":""}
+        {interno&&<span style={{marginLeft:8,color:OR,fontWeight:700}}>· Vista de equipo</span>}
+      </div>
+      {vistas.length===0&&<div style={{textAlign:"center",padding:30,color:GRL,fontSize:13}}>Sin cotizaciones con esos filtros</div>}
+      {vistas.map(cot=>{
         const open=expanded===cot.folio;
         return(
           <div key={cot.folio} style={{background:CD,border:"1px solid "+BD,borderRadius:6,marginBottom:8,overflow:"hidden",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
@@ -867,7 +919,9 @@ function HistorialCotizaciones({session,db,mob}){
               <div style={{flex:1}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                   <span style={{fontWeight:700,fontSize:13,fontFamily:"monospace",color:OR}}>{cot.folio}</span>
-                  {admin&&<span style={{fontSize:11,color:GRL}}>· {cot.nombre}{cot.empresa?` (${cot.empresa})`:""}</span>}
+                  {interno&&<span style={{fontSize:11,color:safe(cot.usuario)===safe(session?.usuario)?OR:GRL,fontWeight:safe(cot.usuario)===safe(session?.usuario)?700:400}}>
+                    · {safe(cot.usuario)===safe(session?.usuario)?"Mía":cot.nombre}
+                  </span>}
                 </div>
                 <div style={{display:"flex",gap:12,marginTop:3,flexWrap:"wrap"}}>
                   <span style={{fontSize:11,color:GRL}}>{cot.fecha?new Date(cot.fecha).toLocaleDateString("es-MX",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}):""}</span>
@@ -876,6 +930,9 @@ function HistorialCotizaciones({session,db,mob}){
                 </div>
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                {onReabrir&&<button onClick={e=>{e.stopPropagation();onReabrir(cot);}}
+                  title="Carga las partidas al carrito para modificarlas y generar una cotización nueva"
+                  style={{background:"#fff",color:OR,border:"1.5px solid "+OR,padding:"6px 12px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>REABRIR</button>}
                 <button onClick={e=>{e.stopPropagation();reimprimir(cot);}}
                   style={{background:OR,color:"#fff",border:"none",padding:"6px 12px",borderRadius:4,cursor:"pointer",fontSize:11,fontWeight:700}}>📄 PDF</button>
                 <span style={{color:GRL,fontSize:16,transform:open?"rotate(180deg)":"none",transition:"transform 0.2s"}}>▾</span>
@@ -968,10 +1025,10 @@ function ProximosArribos({session,db,mob}){
         const rows=parseCsv(ev.target.result);
         if(rows.length===0){setMsg("❌ No se encontraron datos.");setUploading(false);return;}
         const mapped=rows.map(r=>({
-          sku:    safe(r.SKU??r.sku??""),
-          producto:safe(r.PRODUCTO??r.producto??""),
-          qty:    safeNum(r.QTY??r.qty),
-          eta:    safe(r.ETA??r.eta??""),
+          sku:    safe(pick(r,"SKU","CODIGO","CÓDIGO")),
+          producto:safe(pick(r,"PRODUCTO","DESCRIPCION","DESCRIPCIÓN")),
+          qty:    safeNum(pick(r,"QTY","CANTIDAD","PZAS")),
+          eta:    safe(pick(r,"ETA","ARRIBO","FECHA")),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.sku||p.producto);
         if(mapped.length===0){setMsg("❌ No hay registros válidos.");setUploading(false);return;}
@@ -1138,10 +1195,10 @@ function Transitos({session,db,mob}){
         const rows=parseCsv(ev.target.result);
         if(rows.length===0){setMsg("❌ No se encontraron datos.");setUploading(false);return;}
         const mapped=rows.map(r=>({
-          sku:    safe(r.SKU??r.sku??""),
-          producto:safe(r.PRODUCTO??r.producto??""),
-          qty:    safeNum(r.QTY??r.qty),
-          eta:    safe(r.ETA??r.eta??""),
+          sku:    safe(pick(r,"SKU","CODIGO","CÓDIGO")),
+          producto:safe(pick(r,"PRODUCTO","DESCRIPCION","DESCRIPCIÓN")),
+          qty:    safeNum(pick(r,"QTY","CANTIDAD","PZAS")),
+          eta:    safe(pick(r,"ETA","ARRIBO","FECHA")),
           actualizado:new Date().toISOString(),
         })).filter(p=>p.sku||p.producto);
         if(mapped.length===0){setMsg("❌ No hay registros válidos.");setUploading(false);return;}
@@ -1386,7 +1443,21 @@ function CreateAdmin({session,db,hashPassword}){
 export default function App(){
   const [session,setSession]=useState(()=>{try{const s=localStorage.getItem("gt_session");return s?JSON.parse(s):null;}catch(e){return null;}});
   const [view,setView]=useState(()=>{try{const s=localStorage.getItem("gt_session");if(s){const u=JSON.parse(s);return (u.rol==="admin"||u.rol==="superadmin")?"admin":"client";}}catch(e){}return "login";});
-  const [tab,setTab]=useState("products");
+  // La pestaña activa vive en la URL: recargar te deja donde estabas,
+  // el botón "atrás" regresa de sección en lugar de sacarte del portal,
+  // y se pueden guardar o compartir ligas directas a una sección.
+  const TABS_URL=["products","clients","quotes","arribos","settings"];
+  const hashTab=()=>{const h=window.location.hash.replace("#","");return TABS_URL.includes(h)?h:"products";};
+  const [tab,_setTab]=useState(hashTab);
+  const setTab=t=>{
+    _setTab(t);
+    if(t!==window.location.hash.replace("#","")) window.history.pushState(null,"","#"+t);
+  };
+  useEffect(()=>{
+    const onPop=()=>_setTab(hashTab());
+    window.addEventListener("popstate",onPop);
+    return()=>window.removeEventListener("popstate",onPop);
+  },[]);
   const [users,setUsers]=useState([]);
   const [products,setProducts]=useState([]);
   const [prodLoad,setProdLoad]=useState(false);
@@ -1403,6 +1474,7 @@ export default function App(){
   const [modal,setModal]=useState(null);
   const [saving,setSaving]=useState(false);
   const [mob,setMob]=useState(window.innerWidth<768);
+  const [flash,setFlash]=useState("");
   const fref=useRef();const dbRef=useRef(null);
   const emptyC={nombre:"",empresa:"",usuario:"",password:"",lista:"DISTRIBUIDOR",estatus:"activo"};
 
@@ -1422,6 +1494,8 @@ export default function App(){
   async function loadUsers(){setUserLoad(true);const d=await fbGetUsuarios();if(d!==null)setUsers(d);setUserLoad(false);}
 
   function addToCart(p){
+    setFlash(safe(p.descripcion).slice(0,44)||safe(p.codigo));
+    setTimeout(()=>setFlash(""),1800);
     const lista=safe(session?.lista).toUpperCase();
     const vend=isVendedor(session);
     const tipoPrecio=vend?"publico":lista==="DISTRIBUIDOR"?"distribuidor":lista==="ASOCIADO"?"asociado":"publico";
@@ -1456,7 +1530,26 @@ export default function App(){
     setLoginLoad(false);
   }
 
-  function doLogout(){setSession(null);setView("login");setSearch("");setDs("");setPage(0);setProducts([]);setUsers([]);setCart([]);localStorage.removeItem("gt_session");}
+  function reabrirCotizacion(cot){
+    const items=(cot.items||[]).map(it=>({
+      codigo:safe(it.codigo),descripcion:safe(it.descripcion),
+      iva:safe(it.iva??"0"),
+      precio:safeNum(it.precio),
+      tipoPrecio:safe(it.tipoPrecio)||"publico",
+      cantidad:Math.max(1,Math.round(safeNum(it.cantidad))||1),
+      // Se conserva el precio cotizado como base de los tres niveles:
+      // reabrir no debe re-tarifar por su cuenta.
+      _publico:safeNum(it._publico)||safeNum(it.precio),
+      _distribuidor:safeNum(it._distribuidor)||safeNum(it.precio),
+      _asociado:safeNum(it._asociado)||safeNum(it.precio),
+    }));
+    if(items.length===0){alert("Esta cotización no tiene partidas guardadas.");return;}
+    setCart(items);
+    setCartOpen(true);
+    setTab("products");
+  }
+
+  function doLogout(){setSession(null);setView("login");setSearch("");setDs("");setPage(0);setProducts([]);setUsers([]);setCart([]);localStorage.removeItem("gt_session");window.history.replaceState(null,"","#products");}
 
   async function handleFile(e){
     const file=e.target.files[0];if(!file)return;e.target.value="";
@@ -1468,18 +1561,18 @@ export default function App(){
         const rows=parseCsv(ev.target.result);
         if(rows.length===0){setMsg("❌ No se encontró columna CÓDIGO.");return;}
         const mapped=rows.map(r=>({
-          codigo:     safe(r.CODIGO??r["CÓDIGO"]??r.codigo??""),
-          descripcion:safe(r.DESCRIPCION??r["DESCRIPCIÓN"]??r.descripcion??""),
-          gdl1:safeNum(r.GDL1??r.gdl1),
-          gdl3:safeNum(r.GDL3??r.gdl3),
-          ags: safeNum(r.AGS??r.ags),
-          col: safeNum(r.COL??r.col),
-          len: safeNum(r.LEN??r.len),
-          cul: safeNum(r.CUL??r.cul),
-          publico:     safeNum(r.PUBLICO??r["PÚBLICO"]??r.publico),
-          distribuidor:safeNum(r.DISTRIBUIDOR??r.distribuidor),
-          asociado:    safeNum(r.ASOCIADO??r.asociado),
-          iva: safe(r["IVA "]??r.IVA??r["iva "]??r.iva??"0"),
+          codigo:     safe(pick(r,"CODIGO","CÓDIGO","SKU")),
+          descripcion:safe(pick(r,"DESCRIPCION","DESCRIPCIÓN","PRODUCTO")),
+          gdl1:safeNum(pick(r,"GDL1")),
+          gdl3:safeNum(pick(r,"GDL3")),
+          ags: safeNum(pick(r,"AGS")),
+          col: safeNum(pick(r,"COL")),
+          len: safeNum(pick(r,"LEN")),
+          cul: safeNum(pick(r,"CUL")),
+          publico:     safeNum(pick(r,"PUBLICO","PÚBLICO")),
+          distribuidor:safeNum(pick(r,"DISTRIBUIDOR")),
+          asociado:    safeNum(pick(r,"ASOCIADO")),
+          iva: safe(pick(r,"IVA"))||"0",
           actualizado:new Date().toISOString(),
         })).filter(p=>p.codigo);
         if(mapped.length===0){setMsg("❌ No hay productos válidos.");return;}
@@ -1581,19 +1674,32 @@ export default function App(){
     </div>;
   }
 
-  const Hdr=session&&<div style={{background:OR,borderBottom:"2px solid #e05500",padding:mob?"10px 14px":"11px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 2px 8px rgba(0,0,0,0.15)"}}>
-    <div style={{display:"flex",alignItems:"center",gap:12}}>
-      <Logo h={mob?32:44}/>
-      {!mob&&<><div style={{width:1,height:30,background:"rgba(255,255,255,0.3)"}}/><div>
-        <div style={{color:"rgba(255,255,255,0.9)",fontSize:10,letterSpacing:2}}>{isAdminRole(session)?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</div>
-        <div style={{color:"rgba(255,255,255,0.75)",fontSize:9,letterSpacing:0.5,marginTop:2}}>SUCURSALES: {SUCURSALES}</div>
-      </div></>}
-    </div>
-    <div style={{display:"flex",alignItems:"center",gap:10}}>
-      {!mob&&<div style={{textAlign:"right"}}><div style={{color:"#fff",fontSize:12,fontWeight:600}}>{session.nombre}</div>{session.empresa&&<div style={{color:"rgba(255,255,255,0.75)",fontSize:10}}>{session.empresa}</div>}</div>}
-      <button onClick={doLogout} style={{background:"rgba(255,255,255,0.2)",color:"#fff",border:"1px solid rgba(255,255,255,0.4)",padding:"7px 16px",borderRadius:4,cursor:"pointer",fontWeight:700,fontSize:11,letterSpacing:1}}>SALIR</button>
+  const Hdr=session&&<div style={{position:"sticky",top:0,zIndex:900}}>
+    <div style={{height:3,background:OR}}/>
+    <div style={{background:CD,borderBottom:"1px solid "+BD,padding:mob?"9px 14px":"10px 24px",display:"flex",alignItems:"center",justifyContent:"space-between",boxShadow:"0 1px 6px rgba(0,0,0,0.06)"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14}}>
+        <Logo color h={mob?36:50}/>
+        {!mob&&<><div style={{width:1,height:34,background:BD}}/><div>
+          <div style={{color:"#1a1a1a",fontSize:10,letterSpacing:2,fontWeight:700}}>{isAdminRole(session)?"PANEL ADMINISTRADOR":"PORTAL DE PRECIOS"}</div>
+          <div style={{color:GRL,fontSize:9,letterSpacing:0.4,marginTop:3}}><span style={{color:OR,fontWeight:700}}>SUCURSALES</span> {SUCURSALES}</div>
+        </div></>}
+      </div>
+      <div style={{display:"flex",alignItems:"center",gap:12}}>
+        {!mob&&<div style={{textAlign:"right"}}>
+          <div style={{color:"#1a1a1a",fontSize:12,fontWeight:700}}>{session.nombre}</div>
+          <div style={{color:GRL,fontSize:10}}>{session.empresa||safe(session.lista)}</div>
+        </div>}
+        <button onClick={doLogout} title="Cerrar sesión"
+          style={{background:"#fff",color:OR,border:"1.5px solid "+OR,padding:"7px 16px",borderRadius:5,cursor:"pointer",fontWeight:700,fontSize:11,letterSpacing:1}}>SALIR</button>
+      </div>
     </div>
   </div>;
+
+  const Flash=flash&&(
+    <div style={{position:"fixed",bottom:cart.length>0?84:24,right:24,zIndex:1100,background:"#1a1a1a",color:"#fff",padding:"10px 16px",borderRadius:6,fontSize:12,fontWeight:600,boxShadow:"0 4px 16px rgba(0,0,0,0.25)",maxWidth:320,display:"flex",alignItems:"center",gap:8}}>
+      <span style={{color:"#4ade80",fontSize:14}}>✓</span> Agregado: {flash}
+    </div>
+  );
 
   const CartFab=cart.length>0&&!cartOpen&&(
     <button onClick={()=>setCartOpen(true)} style={{position:"fixed",bottom:24,right:24,zIndex:1000,background:OR,color:"#fff",border:"none",borderRadius:"50px",padding:"12px 20px",cursor:"pointer",fontWeight:700,fontSize:13,boxShadow:"0 4px 16px rgba(255,107,6,0.5)",display:"flex",alignItems:"center",gap:8}}>
@@ -1606,11 +1712,15 @@ export default function App(){
   if(view==="login") return(
     <div style={{minHeight:"100vh",background:DK,display:"flex",alignItems:"center",justifyContent:"center",fontFamily:"Arial,sans-serif",padding:16}}>
       <div style={{width:"100%",maxWidth:360,background:CD,borderRadius:8,overflow:"hidden",boxShadow:"0 8px 40px rgba(0,0,0,0.12)"}}>
-        <div style={{background:OR,padding:"20px 28px",display:"flex",justifyContent:"center"}}><Logo h={48}/></div>
-        <div style={{padding:"26px 28px 24px"}}>
-          <div style={{color:GRL,fontSize:11,letterSpacing:3,textAlign:"center",marginBottom:20}}>PORTAL DE PRECIOS</div>
-          <Inp label="USUARIO" value={lu} onChange={e=>setLu(e.target.value)}/>
-          <Inp label="CONTRASEÑA" value={lp} onChange={e=>setLp(e.target.value)} type="password" mb={20}/>
+        <div style={{height:4,background:OR}}/>
+        <div style={{padding:"22px 28px 6px",display:"flex",justifyContent:"center"}}><Logo color h={78}/></div>
+        <div style={{padding:"10px 28px 24px"}}>
+          <div style={{color:GRL,fontSize:11,letterSpacing:3,textAlign:"center",marginBottom:4}}>PORTAL DE PRECIOS</div>
+          <div style={{color:"#bbb",fontSize:9,letterSpacing:0.4,textAlign:"center",marginBottom:20}}>{SUCURSALES}</div>
+          <Inp label="USUARIO" value={lu} onChange={e=>setLu(e.target.value)} autoFocus
+            onKeyDown={e=>{if(e.key==="Enter"&&!loginLoad)doLogin();}}/>
+          <Inp label="CONTRASEÑA" value={lp} onChange={e=>setLp(e.target.value)} type="password" mb={20}
+            onKeyDown={e=>{if(e.key==="Enter"&&!loginLoad)doLogin();}}/>
           {lerr&&<div style={{color:"#dc2626",fontSize:12,textAlign:"center",marginBottom:12,fontWeight:600}}>{lerr}</div>}
           <button onClick={doLogin} disabled={loginLoad}
             style={{width:"100%",padding:"12px",background:OR,color:"#fff",border:"none",borderRadius:4,fontSize:13,fontWeight:700,cursor:loginLoad?"wait":"pointer",letterSpacing:2,opacity:loginLoad?0.7:1}}>
@@ -1626,7 +1736,7 @@ export default function App(){
     <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
       {Hdr}{modal&&<ClientModal/>}
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
-      {CartFab}
+      {CartFab}{Flash}
       <div style={{background:CD,display:"flex",borderBottom:"1px solid "+BD,padding:mob?"0 8px":"0 24px",overflowX:"auto",boxShadow:"0 1px 4px rgba(0,0,0,0.04)"}}>
         {[["products","📦 PRODUCTOS"],["clients","👥 CLIENTES"],["quotes","📋 COTIZACIONES"],["arribos","🚢 ARRIBOS"],
           ...(canDo(session,"config")?[["settings","⚙️ CONFIG"]]:[])]
@@ -1735,7 +1845,7 @@ export default function App(){
           )}
         </div>}
 
-        {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
+        {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob} onReabrir={reabrirCotizacion}/>}
 
         {tab==="arribos"&&<ProximosArribos session={session} db={db} mob={mob}/>}
 
@@ -1769,10 +1879,12 @@ export default function App(){
   // ════ CLIENTE / VENDEDOR ════════════════════════════════════
   const lista=safe(session?.lista).toUpperCase();
   const vend=isVendedor(session);
+  const tabsCliente=["products","quotes",...(vend?["arribos"]:[])];
+  const tabC=tabsCliente.includes(tab)?tab:"products";
   return(
     <div style={{minHeight:"100vh",background:DK,fontFamily:"Arial,sans-serif",color:"#1a1a1a"}}>
       {cartOpen&&<CartPanel cart={cart} setCart={setCart} session={session} db={db} onClose={()=>setCartOpen(false)} mob={mob}/>}
-      {CartFab}{Hdr}
+      {CartFab}{Flash}{Hdr}
       <div style={{background:"linear-gradient(90deg,#e05500,#c44a00)",padding:"8px "+(mob?"12px":"24px"),display:"flex",alignItems:"center",gap:8}}>
         <span style={{color:"#fff",fontSize:14}}>★</span>
         <span style={{color:"#fff",fontSize:mob?11:13,fontWeight:700}}>CONTADO ANTICIPADO: <span style={{color:"#ffe0c0"}}>3% DESCUENTO ADICIONAL</span></span>
@@ -1792,12 +1904,12 @@ export default function App(){
         {[["products","📦 CATÁLOGO"],["quotes","📋 MIS COTIZACIONES"],
           ...(vend?[["arribos","🚢 PRÓXIMOS ARRIBOS"]]:[])]
           .map(([k,l])=>(
-          <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tab===k?OR:GRL,borderBottom:tab===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
+          <button key={k} onClick={()=>setTab(k)} style={{padding:mob?"10px 12px":"11px 18px",background:"none",border:"none",color:tabC===k?OR:GRL,borderBottom:tabC===k?"2px solid "+OR:"2px solid transparent",cursor:"pointer",fontSize:mob?11:12,fontWeight:700,letterSpacing:1,marginBottom:-1,whiteSpace:"nowrap"}}>{l}</button>
         ))}
       </div>
 
       <div style={{padding:mob?12:20,maxWidth:1400,margin:"0 auto"}}>
-        {tab==="products"&&<>
+        {tabC==="products"&&<>
           <div style={{background:"#fff7ed",borderLeft:"3px solid "+OR,border:"1px solid #fed7aa",borderRadius:4,padding:"8px 13px",marginBottom:12,display:"flex",alignItems:"center",gap:8}}>
             <span style={{color:OR,fontWeight:700}}>i</span>
             <span style={{color:GRL,fontSize:11}}>Precios <strong style={{color:"#1a1a1a"}}>antes de IVA</strong>. <strong style={{color:"#dc2626"}}>Productos agrícolas no causan IVA.</strong></span>
@@ -1809,7 +1921,18 @@ export default function App(){
           {prodLoad&&<div style={{textAlign:"center",padding:40,color:GRL}}>Cargando productos...</div>}
           {!prodLoad&&<>
             <Buscador search={search} ds={ds} onChange={setSearch} count={filtered.length} mob={mob}/>
-            {mob?(
+            {filtered.length===0&&<div style={{textAlign:"center",padding:"50px 20px",color:GRL,background:CD,border:"1px solid "+BD,borderRadius:6}}>
+              <div style={{fontSize:38,marginBottom:10}}>{ds.trim()?"🔍":"📦"}</div>
+              {ds.trim()?<>
+                <div style={{fontSize:14,fontWeight:600,color:"#1a1a1a"}}>Sin resultados para "{ds}"</div>
+                <div style={{fontSize:12,marginTop:6}}>Prueba con la medida (315/80R22.5) o solo el código.</div>
+                <div style={{marginTop:14}}><Btn ghost onClick={()=>setSearch("")}>LIMPIAR BÚSQUEDA</Btn></div>
+              </>:<>
+                <div style={{fontSize:14,fontWeight:600,color:"#1a1a1a"}}>Catálogo no disponible</div>
+                <div style={{fontSize:12,marginTop:6}}>Contacta al administrador para que actualice la lista de precios.</div>
+              </>}
+            </div>}
+            {filtered.length>0&&(mob?(
               <div>{filtered.slice(page*PS,(page+1)*PS).map((p,i)=>{
                 const tot=calcTotal(p),disp=tot>0,conIvaP=tieneIVA(p);
                 return <div key={i} style={{background:CD,border:"1px solid "+BD,borderRadius:6,padding:12,marginBottom:8}}>
@@ -1878,12 +2001,12 @@ export default function App(){
                   })}</tbody>
                 </table>
               </div>
-            )}
-            <Pager total={filtered.length} pg={page} setPg={setPage} ps={PS}/>
+            ))}
+            {filtered.length>0&&<Pager total={filtered.length} pg={page} setPg={setPage} ps={PS}/>}
           </>}
         </>}
-        {tab==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob}/>}
-        {tab==="arribos"&&vend&&<ProximosArribos session={session} db={db} mob={mob}/>}
+        {tabC==="quotes"&&<HistorialCotizaciones session={session} db={db} mob={mob} onReabrir={reabrirCotizacion}/>}
+        {tabC==="arribos"&&vend&&<ProximosArribos session={session} db={db} mob={mob}/>}
       </div>
     </div>
   );
